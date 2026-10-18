@@ -11,3 +11,4 @@ dist/
 coverage/
 .DS_Store
 *.sql.gz
+bslmesh_public_git/

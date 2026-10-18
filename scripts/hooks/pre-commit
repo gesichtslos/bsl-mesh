@@ -1,0 +1,7 @@
+#!/bin/sh
+# bsl-mesh-publication-hook
+set -eu
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+node scripts/scan-secrets.mjs --staged
+git diff --cached --check
