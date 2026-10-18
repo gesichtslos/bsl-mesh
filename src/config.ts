@@ -22,6 +22,8 @@ export type AppConfig = {
   oidc: OidcConfig | null;
   rateLimitAgentPerMinute: number;
   rateLimitOwnerPerMinute: number;
+  rateLimitPublicPerMinute: number;
+  knowledgeSourceKind: 'organic' | 'synthetic' | 'import';
 };
 
 export class ConfigError extends Error {
@@ -44,6 +46,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     oidc: readOidc(env),
     rateLimitAgentPerMinute: readLimit(env, 'RATE_LIMIT_AGENT_PER_MINUTE', 60),
     rateLimitOwnerPerMinute: readLimit(env, 'RATE_LIMIT_OWNER_PER_MINUTE', 120),
+    rateLimitPublicPerMinute: readLimit(env, 'RATE_LIMIT_PUBLIC_PER_MINUTE', 120),
+    knowledgeSourceKind: readSourceKind(env, nodeEnv),
   };
 }
 
@@ -119,6 +123,20 @@ function readLimit(env: NodeJS.ProcessEnv, name: string, fallback: number): numb
     throw new ConfigError(`${name} must be an integer from 1 to 100000.`);
   }
   return value;
+}
+
+function readSourceKind(
+  env: NodeJS.ProcessEnv,
+  nodeEnv: NodeEnv,
+): 'organic' | 'synthetic' | 'import' {
+  const value = env['KNOWLEDGE_SOURCE_KIND']?.trim() ?? '';
+  if (value === '') {
+    return nodeEnv === 'production' ? 'organic' : 'synthetic';
+  }
+  if (value === 'organic' || value === 'synthetic' || value === 'import') {
+    return value;
+  }
+  throw new ConfigError('KNOWLEDGE_SOURCE_KIND must be organic, synthetic, or import.');
 }
 
 function readOidc(env: NodeJS.ProcessEnv): OidcConfig | null {

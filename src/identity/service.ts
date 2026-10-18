@@ -30,7 +30,7 @@ type OwnerRecord = {
   publicationEnabled: boolean;
 };
 
-type AgentPrincipal = {
+export type AgentPrincipal = {
   credentialId: string;
   agentId: string;
   ownerId: string;
@@ -623,12 +623,18 @@ export class IdentityService {
     };
   }
 
-  async authorizeWrite(input: {
+  async authenticateAgent(agentToken: string): Promise<AgentPrincipal> {
+    const principal = await this.agentFromToken(agentToken);
+    await this.limit(this.agentLimits(principal));
+    return principal;
+  }
+
+  async requireAgentScope(input: {
     agentToken: string;
     scope: string;
     claimedAgentId: string | undefined;
     requestId: string;
-  }): Promise<void> {
+  }): Promise<AgentPrincipal> {
     const principal = await this.agentFromToken(input.agentToken);
     await this.limit(this.agentLimits(principal));
     if (!isWriteScope(input.scope)) {
@@ -646,6 +652,16 @@ export class IdentityService {
       await this.recordDenial(principal, input.scope, 'scope', undefined, input.requestId);
       throw new IdentityError(403, 'Forbidden', IDENTITY_DETAIL.scopeDenied);
     }
+    return principal;
+  }
+
+  async authorizeWrite(input: {
+    agentToken: string;
+    scope: string;
+    claimedAgentId: string | undefined;
+    requestId: string;
+  }): Promise<void> {
+    await this.requireAgentScope(input);
   }
 
   private agentLimits(principal: AgentPrincipal): RatePrincipal[] {

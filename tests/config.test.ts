@@ -23,7 +23,17 @@ describe('loadConfig', () => {
       oidc: null,
       rateLimitAgentPerMinute: 60,
       rateLimitOwnerPerMinute: 120,
+      rateLimitPublicPerMinute: 120,
+      knowledgeSourceKind: 'synthetic',
     });
+  });
+
+  test('assigns synthetic knowledge outside production and organic knowledge in production', () => {
+    expect(loadConfig({ ...complete, NODE_ENV: 'production' }).knowledgeSourceKind).toBe('organic');
+    expect(loadConfig({ ...complete, KNOWLEDGE_SOURCE_KIND: 'import' }).knowledgeSourceKind).toBe('import');
+    expect(() => loadConfig({ ...complete, KNOWLEDGE_SOURCE_KIND: 'client-supplied' })).toThrow(
+      'KNOWLEDGE_SOURCE_KIND',
+    );
   });
 
   test('keeps public registration closed and rejects the test adapter in production', () => {
