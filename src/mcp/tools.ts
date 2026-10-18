@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { McpServer, type AuthInfo } from '@modelcontextprotocol/server';
 
 import type { Pool } from 'pg';
@@ -75,6 +77,7 @@ export function buildMcpServer(input: {
   pool: Pool;
   config: AppConfig;
   now: () => Date;
+  afterCaseCreated?: (caseId: string) => Promise<void>;
 }): McpServer {
   const caller = callerFrom(input.authInfo);
   const server = new McpServer({ name: 'bsl-mesh', version: '0.1.0' });
@@ -203,9 +206,10 @@ export function buildMcpServer(input: {
           if (typeof caseId !== 'string') {
             throw new Error('Case response did not include an id.');
           }
+          await input.afterCaseCreated?.(caseId);
           const published = await knowledge.publishCase({
             accessToken: caller.token,
-            idempotencyKey: publishKey(args.idempotency_key),
+            idempotencyKey: publishIdempotencyKey(args.idempotency_key),
             claimedAgentId: undefined,
             requestId: 'mcp',
             caseId,
@@ -258,6 +262,7 @@ export function buildMcpServer(input: {
   return server;
 }
 
-function publishKey(idempotencyKey: string): string {
-  return `pub-${idempotencyKey}`.slice(0, 128);
+export function publishIdempotencyKey(idempotencyKey: string): string {
+  const digest = createHash('sha256').update(idempotencyKey, 'utf8').digest('hex');
+  return `pub-${digest}`;
 }

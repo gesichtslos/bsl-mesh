@@ -62,6 +62,7 @@ describe('http foundation', () => {
       api_version: '0.1.0',
       mcp: {
         protocol: '2026-07-28',
+        legacy_protocol: '2025-11-25',
         transport: 'streamable-http',
         endpoint: '/mcp',
         auth: 'bearer-credential',

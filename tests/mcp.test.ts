@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import * as z from 'zod/v4';
 import { expect, test } from 'vitest';
 
+import { publishIdempotencyKey } from '../src/mcp/tools.js';
 import {
   addEvidenceObject,
   feedInput,
@@ -23,6 +24,20 @@ test('checked-in MCP tool schemas match the Zod inputs', () => {
     bslmesh_publish_case: z.toJSONSchema(publishCaseInput),
     bslmesh_add_evidence: z.toJSONSchema(addEvidenceObject),
   });
+});
+
+test('derived publish keys keep the full caller key', () => {
+  const prefix = 'k'.repeat(124);
+  const left = `${prefix}aaaa`;
+  const right = `${prefix}bbbb`;
+  const first = publishIdempotencyKey(left);
+  const second = publishIdempotencyKey(right);
+  expect(left).toHaveLength(128);
+  expect(right).toHaveLength(128);
+  expect(first).not.toBe(second);
+  expect(first).toBe(publishIdempotencyKey(left));
+  expect(first).toMatch(/^pub-[a-f0-9]{64}$/);
+  expect(second).toMatch(/^pub-[a-f0-9]{64}$/);
 });
 
 test('publish and evidence schemas reject client-supplied source_kind', () => {

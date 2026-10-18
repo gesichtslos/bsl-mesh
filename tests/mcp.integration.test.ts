@@ -114,10 +114,10 @@ async function credentialFor(
   return { id: body.id, token: body.token };
 }
 
-async function connect(base: string, token?: string): Promise<Client> {
+async function connect(base: string, token?: string, era: 'modern' | 'legacy' = 'modern'): Promise<Client> {
   const client = new Client(
     { name: 'bslmesh-conformance', version: '0.1.0' },
-    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+    era === 'modern' ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {},
   );
   const headers: Record<string, string> = {};
   if (token !== undefined) {
@@ -439,7 +439,7 @@ test('rejects a foreign origin, a legacy handshake, a header mismatch, and an ov
   });
   expect(host.statusCode).toBe(403);
 
-  const legacy = await fetch(`${base}/mcp`, {
+  const unsupported = await fetch(`${base}/mcp`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -450,15 +450,16 @@ test('rejects a foreign origin, a legacy handshake, a header mismatch, and an ov
       id: 1,
       method: 'initialize',
       params: {
-        protocolVersion: '2025-03-26',
+        protocolVersion: '1999-01-01',
         capabilities: {},
         clientInfo: { name: 'legacy', version: '0' },
       },
     }),
   });
-  expect(legacy.status).toBe(400);
-  const legacyBody = await legacy.json() as { error?: { message?: string } };
-  expect(legacyBody.error?.message).toContain('Unsupported protocol version');
+  const unsupportedText = await unsupported.text();
+  expect(unsupported.status).toBe(200);
+  expect(unsupportedText).toContain('"protocolVersion":"2025-11-25"');
+  expect(unsupportedText).not.toContain('1999-01-01');
 
   const mismatch = await fetch(`${base}/mcp`, {
     method: 'POST',
@@ -524,6 +525,144 @@ test('anonymous MCP reads share the public rate limit', async () => {
   } finally {
     await client.close();
     await limited.close();
+  }
+});
+
+test('128-character idempotency keys that differ at the end publish two cases', async () => {
+  const owner = await sessionFor(app, 'mcp-idem@example.test');
+  const writer = await credentialFor(app, owner, ['cases:write']);
+  const client = await connect(base, writer.token);
+  try {
+    const prefix = 'k'.repeat(124);
+    const leftArguments = {
+      ...publishArguments('Длинный ключ A', 'Первая независимая публикация.'),
+      idempotency_key: `${prefix}aaaa`,
+    };
+    const rightArguments = {
+      ...publishArguments('Длинный ключ B', 'Вторая независимая публикация.'),
+      idempotency_key: `${prefix}bbbb`,
+    };
+    const left = toolJson(await client.callTool({ name: 'bslmesh_publish_case', arguments: leftArguments })) as { id: string };
+    const right = toolJson(await client.callTool({ name: 'bslmesh_publish_case', arguments: rightArguments })) as { id: string };
+    const leftAgain = toolJson(await client.callTool({ name: 'bslmesh_publish_case', arguments: leftArguments })) as { id: string };
+    expect(left.id).not.toBe(right.id);
+    expect(leftAgain.id).toBe(left.id);
+    const rows = await pool.query<{ id: string; visibility: string }>(
+      `SELECT id, visibility FROM cases WHERE title IN ($1, $2) ORDER BY title ASC`,
+      ['Длинный ключ A', 'Длинный ключ B'],
+    );
+    expect(rows.rows.map((row) => row.id)).toEqual([left.id, right.id]);
+    expect(rows.rows.every((row) => row.visibility === 'public')).toBe(true);
+  } finally {
+    await client.close();
+  }
+});
+
+test('a failed publication stays private and the same key recovers without a second case', async () => {
+  const secret = 'mcp-unpublished-draft-secret';
+  const title = 'Частичная публикация MCP';
+  const email = 'mcp-partial@example.test';
+  let armed = true;
+  const partial = await buildApp(identityConfig(), {
+    afterMcpCaseCreated: async () => {
+      if (!armed) {
+        return;
+      }
+      armed = false;
+      await pool.query('UPDATE owners SET publication_enabled = false WHERE email = $1', [email]);
+    },
+  });
+  await partial.listen({ host: '127.0.0.1', port: 0 });
+  const address = partial.server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('The partial-publication listener did not bind.');
+  }
+  const partialBase = `http://127.0.0.1:${address.port}`;
+  const owner = await sessionFor(partial, email);
+  const writer = await credentialFor(partial, owner, ['cases:write']);
+  const client = await connect(partialBase, writer.token);
+  try {
+    const arguments_ = publishArguments(title, `Черновик ${secret} ещё не опубликован.`);
+    const failed = await client.callTool({ name: 'bslmesh_publish_case', arguments: arguments_ });
+    expect(failed.isError).toBe(true);
+    const failedText = JSON.stringify(failed);
+    expect(failedText).not.toContain(secret);
+    expect(failedText).not.toContain(writer.token);
+    expect(failedText).not.toContain('"visibility":"public"');
+    const hidden = await fetch(`${partialBase}/api/v1/search?q=${encodeURIComponent(title)}`);
+    expect(hidden.status).toBe(200);
+    expect(JSON.stringify(await hidden.json())).not.toContain(secret);
+    const stored = await pool.query<{ visibility: string }>(
+      'SELECT visibility FROM cases WHERE title = $1',
+      [title],
+    );
+    expect(stored.rows).toEqual([{ visibility: 'private' }]);
+
+    await pool.query('UPDATE owners SET publication_enabled = true WHERE email = $1', [email]);
+    const recovered = toolJson(await client.callTool({
+      name: 'bslmesh_publish_case',
+      arguments: arguments_,
+    })) as { id: string; visibility: string; body_md: string };
+    const repeated = toolJson(await client.callTool({
+      name: 'bslmesh_publish_case',
+      arguments: arguments_,
+    })) as { id: string };
+    expect(recovered.visibility).toBe('public');
+    expect(recovered.body_md).toContain(secret);
+    expect(repeated.id).toBe(recovered.id);
+    const after = await pool.query<{ id: string }>(
+      'SELECT id FROM cases WHERE title = $1',
+      [title],
+    );
+    expect(after.rows.map((row) => row.id)).toEqual([recovered.id]);
+    const anonymous = await fetch(`${partialBase}/api/v1/cases/${recovered.id}`);
+    expect(anonymous.status).toBe(200);
+    expect(JSON.stringify(await anonymous.json())).toContain(secret);
+  } finally {
+    await client.close();
+    await partial.close();
+  }
+});
+
+test('a 2025-era client reads published knowledge without write tools', async () => {
+  const owner = await sessionFor(app, 'mcp-legacy@example.test');
+  const writer = await credentialFor(app, owner, ['cases:write']);
+  const reader = await credentialFor(app, owner, ['knowledge:read', 'profile:read']);
+  const publisher = await connect(base, writer.token);
+  let legacy: Client | undefined;
+  try {
+    const published = toolJson(await publisher.callTool({
+      name: 'bslmesh_publish_case',
+      arguments: publishArguments('Кейс для клиента 2025', 'Публичная синтетическая сводка.'),
+    })) as { id: string };
+    legacy = await connect(base, reader.token, 'legacy');
+    expect(legacy.getProtocolEra()).toBe('legacy');
+    const names = (await legacy.listTools()).tools.map((tool) => tool.name).sort();
+    expect(names).toEqual([
+      'bslmesh_get_capabilities',
+      'bslmesh_get_case',
+      'bslmesh_get_feed',
+      'bslmesh_search_knowledge',
+    ]);
+    const capabilities = toolJson(await legacy.callTool({
+      name: 'bslmesh_get_capabilities',
+      arguments: {},
+    })) as { mcp: { protocol: string; legacy_protocol: string } };
+    expect(capabilities.mcp.protocol).toBe('2026-07-28');
+    expect(capabilities.mcp.legacy_protocol).toBe('2025-11-25');
+    const viewed = toolJson(await legacy.callTool({
+      name: 'bslmesh_get_case',
+      arguments: { case_id: published.id },
+    })) as { id: string; source_kind: string };
+    expect(viewed.id).toBe(published.id);
+    expect(viewed.source_kind).toBe('synthetic');
+    await expect(legacy.callTool({
+      name: 'bslmesh_publish_case',
+      arguments: publishArguments('Запись клиентом только для чтения', 'Не должна сохраниться.'),
+    })).rejects.toThrow();
+  } finally {
+    await publisher.close();
+    await legacy?.close();
   }
 });
 

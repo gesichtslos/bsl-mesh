@@ -4,12 +4,14 @@ import { problem, problemSchema } from './problem.js';
 
 export const API_VERSION = '0.1.0';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
+export const MCP_LEGACY_PROTOCOL_VERSION = '2025-11-25';
 
 export function capabilityDocument() {
   return {
     api_version: API_VERSION,
     mcp: {
       protocol: MCP_PROTOCOL_VERSION,
+      legacy_protocol: MCP_LEGACY_PROTOCOL_VERSION,
       transport: 'streamable-http' as const,
       endpoint: '/mcp' as const,
       auth: 'bearer-credential' as const,
@@ -28,9 +30,10 @@ const capabilitiesSchema = {
     mcp: {
       type: 'object',
       additionalProperties: false,
-      required: ['protocol', 'transport', 'endpoint', 'auth', 'oauth'],
+      required: ['protocol', 'legacy_protocol', 'transport', 'endpoint', 'auth', 'oauth'],
       properties: {
         protocol: { type: 'string', const: MCP_PROTOCOL_VERSION },
+        legacy_protocol: { type: 'string', const: MCP_LEGACY_PROTOCOL_VERSION },
         transport: { type: 'string', const: 'streamable-http' },
         endpoint: { type: 'string', const: '/mcp' },
         auth: { type: 'string', const: 'bearer-credential' },

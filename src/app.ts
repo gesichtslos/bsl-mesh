@@ -40,6 +40,7 @@ const REDACT = [
 export type BuildAppOptions = {
   logStream?: Writable;
   now?: () => Date;
+  afterMcpCaseCreated?: (caseId: string) => Promise<void>;
 };
 
 export async function buildApp(config: AppConfig, options: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -135,6 +136,13 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
     magicLink: magicLinkRoute(config),
   });
   await app.register(knowledgeRoutes, { service: knowledge });
-  registerMcpRoute(app, { knowledge, identity, pool, config, now });
+  registerMcpRoute(app, {
+    knowledge,
+    identity,
+    pool,
+    config,
+    now,
+    ...(options.afterMcpCaseCreated !== undefined ? { afterCaseCreated: options.afterMcpCaseCreated } : {}),
+  });
   return app;
 }

@@ -18,6 +18,7 @@ export function registerMcpRoute(
     pool: import('pg').Pool;
     config: AppConfig;
     now: () => Date;
+    afterCaseCreated?: (caseId: string) => Promise<void>;
   },
 ): void {
   const handler = createMcpHandler((ctx) => buildMcpServer({
@@ -26,7 +27,8 @@ export function registerMcpRoute(
     pool: input.pool,
     config: input.config,
     now: input.now,
-  }), { legacy: 'reject' });
+    ...(input.afterCaseCreated !== undefined ? { afterCaseCreated: input.afterCaseCreated } : {}),
+  }), { legacy: 'stateless' });
   const nodeHandler = toNodeHandler(handler);
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
