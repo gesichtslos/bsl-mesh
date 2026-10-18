@@ -178,14 +178,14 @@ export function scanPushRange(remoteSha, localSha, cwd = process.cwd()) {
   return { findings, count: commits.length };
 }
 
-function report(result) {
+function report(result, unit = 'file(s)') {
   if (result.findings.length > 0) {
     process.stderr.write(`${formatFindings(result.findings).join('\n')}\n`);
     process.stderr.write('High-confidence secret patterns were found. Remove them before publishing. A later deletion does not erase Git history.\n');
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(`${cleanScanMessage(result.count)}\n`);
+  process.stdout.write(`secret scan: no high-confidence patterns in ${result.count} ${unit}. This is not proof the change is safe to publish.\n`);
 }
 
 function main() {
@@ -202,7 +202,7 @@ function main() {
       process.exitCode = 2;
       return;
     }
-    report(scanPushRange(remoteSha, localSha));
+    report(scanPushRange(remoteSha, localSha), 'commit(s)');
     return;
   }
   const files = trackedFiles();
