@@ -607,6 +607,48 @@ test('a new claim revision does not inherit reproduced from the previous one', a
   }
 });
 
+test('a second agent without knowledge:read cannot replay a private response', async () => {
+  const secret = 'idempotent-private-history';
+  const session = await sessionFor(app, 'knowledge-idem-owner@example.test');
+  const reader = await credentialFor(app, session, ['cases:write', 'knowledge:read']);
+  const writerOnly = await credentialFor(app, session, ['cases:write']);
+  const idempotency = key();
+  const payload = {
+    ...casePayload('Повтор без чтения истории'),
+    body_md: `Скрытая история ${secret}.`,
+    claims: [{ text: 'Статическая проверка не гарантирует открытие обычной формы.' }],
+  };
+  const first = await app.inject({
+    method: 'POST',
+    url: '/api/v1/cases',
+    headers: { authorization: `Bearer ${reader}`, 'idempotency-key': idempotency },
+    payload,
+  });
+  expect(first.statusCode).toBe(201);
+  expect(JSON.stringify(first.json())).toContain(secret);
+  const second = await app.inject({
+    method: 'POST',
+    url: '/api/v1/cases',
+    headers: { authorization: `Bearer ${writerOnly}`, 'idempotency-key': idempotency },
+    payload,
+  });
+  expect(second.statusCode).toBe(201);
+  expect(JSON.stringify(second.json())).not.toContain(secret);
+  expect(JSON.stringify(second.json())).not.toContain('Скрытая история');
+  const again = await app.inject({
+    method: 'POST',
+    url: '/api/v1/cases',
+    headers: { authorization: `Bearer ${reader}`, 'idempotency-key': idempotency },
+    payload,
+  });
+  expect(again.statusCode).toBe(201);
+  expect(JSON.stringify(again.json())).toContain(secret);
+  const rows = await pool.query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM cases WHERE title = 'Повтор без чтения истории'`,
+  );
+  expect(rows.rows[0]?.count).toBe(1);
+});
+
 async function writerCredentialId(pool: Pool, token: string): Promise<string> {
   const { createHash } = await import('node:crypto');
   const hash = createHash('sha256').update(token, 'utf8').digest('hex');

@@ -156,7 +156,7 @@ export class KnowledgeService {
     return this.withTransaction(async (client) => {
       const replay = await this.beginIdempotent(client, principal.ownerId, 'case.create', input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 201, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       const current = this.now();
       const topicId = await this.topicId(client, draft.topic);
@@ -216,7 +216,7 @@ export class KnowledgeService {
     return this.withTransaction(async (client) => {
       const replay = await this.beginIdempotent(client, principal.ownerId, 'claim.create', input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 201, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       await this.lockVisibleCase(client, input.caseId, principal, 'contribute');
       const claimId = await this.insertClaim(client, {
@@ -252,7 +252,7 @@ export class KnowledgeService {
       const requestHash = hashRequest({ claimId: input.claimId, draft, verdict: input.reviewVerdict });
       const replay = await this.beginIdempotent(client, principal.ownerId, operation, input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 201, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       const evidenceId = await this.insertEvidence(client, claim, principal, draft, this.now());
       if (input.reviewVerdict !== null) {
@@ -304,7 +304,7 @@ export class KnowledgeService {
     return this.withTransaction(async (client) => {
       const replay = await this.beginIdempotent(client, principal.ownerId, 'case.revise', input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 200, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       const row = await this.lockVisibleCase(client, input.caseId, principal, 'author');
       const nextTitle = title ?? row.title;
@@ -342,7 +342,7 @@ export class KnowledgeService {
     return this.withTransaction(async (client) => {
       const replay = await this.beginIdempotent(client, principal.ownerId, 'claim.revise', input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 200, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       const claim = await this.lockClaim(client, input.claimId, principal);
       if (claim.author_owner_id !== principal.ownerId) {
@@ -385,7 +385,7 @@ export class KnowledgeService {
     return this.withTransaction(async (client) => {
       const replay = await this.beginIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 200, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       const row = await this.lockVisibleCase(client, input.caseId, principal, 'author');
       const current = this.now();
@@ -466,7 +466,7 @@ export class KnowledgeService {
     return this.withTransaction(async (client) => {
       const replay = await this.beginIdempotent(client, principal.ownerId, 'case.visibility', input.idempotencyKey, requestHash);
       if (replay !== null) {
-        return { statusCode: 200, body: replay };
+        return this.replayFor(client, replay, principal);
       }
       const row = await this.lockVisibleCase(client, input.caseId, principal, 'author');
       const current = this.now();
@@ -780,7 +780,7 @@ export class KnowledgeService {
     }>(
       `SELECT author_owner_id, source_kind, relation, result, context_match, substantive
        FROM evidence
-       WHERE claim_id = $1 AND claim_revision = $2`,
+       WHERE claim_id = $1 AND claim_revision = $2 AND status_eligible = true`,
       [claim.id, revision],
     );
     return evaluateClaim({
@@ -879,7 +879,10 @@ export class KnowledgeService {
                 actor_independent, counts_as_reproduction, claim_revision, released, context_id, created_at
          FROM evidence
          WHERE claim_id = $1
-           AND ($2::boolean OR (released = true AND claim_revision = $3))
+           AND (
+             $2::boolean
+             OR (released = true AND claim_revision = $3 AND status_eligible = true)
+           )
          ORDER BY created_at ASC, id ASC`,
         [claim.id, audience === 'audit', shownRevision],
       );
@@ -1112,7 +1115,7 @@ export class KnowledgeService {
     operation: string,
     idemKey: string,
     requestHash: string,
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<{ body: Record<string, unknown>; statusCode: number } | null> {
     const inserted = await client.query(
       `INSERT INTO idempotency_records (owner_id, operation, idem_key, request_hash, response_json, status_code)
        VALUES ($1, $2, $3, $4, '{}'::jsonb, 0)
@@ -1132,7 +1135,37 @@ export class KnowledgeService {
     if (row === undefined || !sameDigest(row.request_hash, requestHash) || row.status_code === 0) {
       throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.idempotencyMismatch);
     }
-    return row.response_json;
+    return { body: row.response_json, statusCode: row.status_code };
+  }
+
+  private async replayFor(
+    client: PoolClient,
+    replay: { body: Record<string, unknown>; statusCode: number },
+    principal: AgentPrincipal,
+  ): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+    if (seesAudit(principal, principal.ownerId)) {
+      return { statusCode: replay.statusCode, body: replay.body };
+    }
+    const caseId = textField(replay.body, 'id') ?? textField(replay.body, 'case_id');
+    if (
+      caseId !== null
+      && textField(replay.body, 'claim_id') !== null
+      && replay.body['body_md'] === undefined
+      && replay.body['revisions'] === undefined
+    ) {
+      return {
+        statusCode: replay.statusCode,
+        body: { claim_id: replay.body['claim_id'], case_id: caseId },
+      };
+    }
+    if (caseId === null || !UUID.test(caseId)) {
+      return { statusCode: replay.statusCode, body: identifiersOnly(replay.body) };
+    }
+    const row = await this.loadCase(client, caseId);
+    if (row === null || row.author_owner_id !== principal.ownerId) {
+      return { statusCode: replay.statusCode, body: { id: caseId } };
+    }
+    return { statusCode: replay.statusCode, body: await this.present(client, row, principal) };
   }
 
   private async finishIdempotent(
@@ -1262,6 +1295,21 @@ function choice<T extends string>(value: string, allowed: readonly T[]): T {
     throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
   }
   return match;
+}
+
+function textField(value: Record<string, unknown>, key: string): string | null {
+  const field = value[key];
+  return typeof field === 'string' ? field : null;
+}
+
+function identifiersOnly(stored: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const key of ['id', 'case_id', 'claim_id', 'visibility', 'current_revision', 'released_revision']) {
+    if (key in stored) {
+      body[key] = stored[key];
+    }
+  }
+  return body;
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {
