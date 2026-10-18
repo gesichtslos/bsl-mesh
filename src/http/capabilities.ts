@@ -13,7 +13,7 @@ const capabilitiesSchema = {
     mcp: { type: 'string', enum: ['unsupported'] },
     features: {
       type: 'array',
-      items: { type: 'string', enum: ['health', 'identity'] },
+      items: { type: 'string', enum: ['health', 'identity', 'knowledge'] },
     },
   },
 } as const;
@@ -22,7 +22,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (app) => {
   app.get('/api/v1/capabilities', { schema: { response: { 200: capabilitiesSchema } } }, async () => ({
     api_version: API_VERSION,
     mcp: 'unsupported' as const,
-    features: ['health', 'identity'] as const,
+    features: ['health', 'identity', 'knowledge'] as const,
   }));
 
   app.post(

@@ -11,6 +11,10 @@ export type AuditDetail = {
   reason?: AuditReason;
   claimed_agent_id?: string;
   publication_enabled?: boolean;
+  case_id?: string;
+  claim_id?: string;
+  evidence_id?: string;
+  visibility?: string;
 };
 
 export function auditDetail(input: Record<string, unknown>): AuditDetail {
@@ -39,6 +43,18 @@ export function auditDetail(input: Record<string, unknown>): AuditDetail {
   }
   if (typeof input['publication_enabled'] === 'boolean') {
     detail.publication_enabled = input['publication_enabled'];
+  }
+  if (typeof input['case_id'] === 'string') {
+    detail.case_id = input['case_id'];
+  }
+  if (typeof input['claim_id'] === 'string') {
+    detail.claim_id = input['claim_id'];
+  }
+  if (typeof input['evidence_id'] === 'string') {
+    detail.evidence_id = input['evidence_id'];
+  }
+  if (input['visibility'] === 'public' || input['visibility'] === 'members' || input['visibility'] === 'private') {
+    detail.visibility = input['visibility'];
   }
   return detail;
 }

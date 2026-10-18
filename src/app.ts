@@ -11,7 +11,9 @@ import { magicLinkRoute } from './identity/provider.js';
 import { capabilitiesRoutes } from './http/capabilities.js';
 import { healthRoutes } from './http/health.js';
 import { identityRoutes } from './http/identity.js';
+import { knowledgeRoutes } from './http/knowledge.js';
 import { problem } from './http/problem.js';
+import { KnowledgeService } from './knowledge/service.js';
 
 const REDACT = [
   'req.headers.authorization',
@@ -103,11 +105,16 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
     const detail = status === 500 ? 'Unexpected error.' : title;
     return reply.code(status).send(problem(status, title, detail, request.id));
   });
+  const now = options.now ?? (() => new Date());
+  const identity = new IdentityService(pool, config, now);
   await app.register(healthRoutes, { pool });
   await app.register(capabilitiesRoutes);
   await app.register(identityRoutes, {
-    service: new IdentityService(pool, config, options.now ?? (() => new Date())),
+    service: identity,
     magicLink: magicLinkRoute(config),
+  });
+  await app.register(knowledgeRoutes, {
+    service: new KnowledgeService(pool, identity, config, now),
   });
   return app;
 }
