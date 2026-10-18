@@ -3,7 +3,7 @@ import { Client } from 'pg';
 
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { buildDatabaseUrl, resolveDatabaseUrl } from '../src/db/database-url.js';
+import { buildDatabaseUrl, decodedDatabasePassword, resolveDatabaseUrl } from '../src/db/database-url.js';
 import { MIGRATION_ADVISORY_LOCK_KEY, MigrationLockError, migrate } from '../src/db/migrate.js';
 import { createPool } from '../src/db/pool.js';
 import {
@@ -110,20 +110,62 @@ test('the tester cannot open the application database', async () => {
   }
 });
 
-test('the application role is not a superuser and can run migrations', async () => {
-  const pool = createPool(resolveDatabaseUrl(process.env));
+test('the application role is not a superuser and migrations are idempotent on an empty database', async () => {
+  const adminUrl = process.env['ADMIN_DATABASE_URL'];
+  if (adminUrl === undefined || adminUrl === '') {
+    throw new Error('ADMIN_DATABASE_URL is required.');
+  }
+  const applicationUrl = resolveDatabaseUrl(process.env);
+  const application = new URL(applicationUrl);
+  const identityPool = createPool(applicationUrl);
   try {
-    const identity = await pool.query<{ username: string; is_superuser: boolean }>(
+    const identity = await identityPool.query<{ username: string; is_superuser: boolean }>(
       `SELECT current_user AS username, rolsuper AS is_superuser
        FROM pg_roles
        WHERE rolname = current_user`,
     );
     expect(identity.rows[0]?.username).toBe('bslmesh_app');
     expect(identity.rows[0]?.is_superuser).toBe(false);
-    const result = await migrate(pool);
-    expect(result.applied).toEqual([]);
+  } finally {
+    await identityPool.end();
+  }
+
+  const databaseName = 'bslmesh_migrate_test';
+  const admin = new Client({ connectionString: adminUrl });
+  await admin.connect();
+  try {
+    await admin.query(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${databaseName} OWNER bslmesh_app`);
+    await admin.query(`REVOKE ALL ON DATABASE ${databaseName} FROM PUBLIC`);
+    await admin.query(`GRANT CONNECT, TEMPORARY, CREATE ON DATABASE ${databaseName} TO bslmesh_app`);
+  } finally {
+    await admin.end();
+  }
+
+  const freshUrl = buildDatabaseUrl({
+    username: 'bslmesh_app',
+    password: decodedDatabasePassword(applicationUrl),
+    host: application.hostname,
+    port: Number(application.port || '5432'),
+    database: databaseName,
+  });
+  const pool = createPool(freshUrl);
+  try {
+    const first = await migrate(pool);
+    const second = await migrate(pool);
+    expect(first.applied).toEqual(['001_app_meta.sql']);
+    expect(first.skipped).toEqual([]);
+    expect(second.applied).toEqual([]);
+    expect(second.skipped).toEqual(['001_app_meta.sql']);
   } finally {
     await pool.end();
+    const cleanup = new Client({ connectionString: adminUrl });
+    await cleanup.connect();
+    try {
+      await cleanup.query(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
+    } finally {
+      await cleanup.end();
+    }
   }
 });
 
