@@ -18,7 +18,46 @@ describe('loadConfig', () => {
       databaseUrl: complete.DATABASE_URL,
       logLevel: 'info',
       nodeEnv: 'test',
+      authPublicRegistration: false,
+      authTestAdapter: false,
+      oidc: null,
+      rateLimitAgentPerMinute: 60,
+      rateLimitOwnerPerMinute: 120,
     });
+  });
+
+  test('keeps public registration closed and rejects the test adapter in production', () => {
+    expect(() => loadConfig({ ...complete, AUTH_PUBLIC_REGISTRATION: 'true' })).toThrow(
+      'reviewed identity provider',
+    );
+    expect(() => loadConfig({
+      ...complete,
+      NODE_ENV: 'production',
+      AUTH_TEST_ADAPTER: 'enabled',
+    })).toThrow('cannot be enabled when NODE_ENV is production');
+    expect(loadConfig({ ...complete, AUTH_TEST_ADAPTER: 'enabled' }).authTestAdapter).toBe(true);
+  });
+
+  test('rejects a partial or credentialed OIDC issuer without echoing it', () => {
+    expect(() => loadConfig({ ...complete, AUTH_OIDC_ISSUER: 'https://idp.example.test' })).toThrow(
+      'must be set together',
+    );
+    const secret = 'synthetic-user-secret';
+    expect(() => loadConfig({
+      ...complete,
+      AUTH_OIDC_ISSUER: `https://user:${secret}@idp.example.test/realm`,
+      AUTH_OIDC_CLIENT_ID: 'synthetic-client',
+    })).toThrow(ConfigError);
+    try {
+      loadConfig({
+        ...complete,
+        AUTH_OIDC_ISSUER: `https://user:${secret}@idp.example.test/realm`,
+        AUTH_OIDC_CLIENT_ID: 'synthetic-client',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(error instanceof Error ? error.message : '').not.toContain(secret);
+    }
   });
 
   test('rejects a missing database URL without echoing other values', () => {
