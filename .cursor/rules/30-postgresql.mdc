@@ -1,0 +1,14 @@
+---
+description: "PostgreSQL schema design and safe migration conventions"
+globs: "migrations/**/*.sql,src/db/**/*.ts,src/repositories/**/*.ts"
+alwaysApply: false
+---
+# PostgreSQL
+
+- PostgreSQL is the transactional source of truth; use built-in full-text and trigram search before introducing a vector store.
+- Always use bound parameters; forbid query-string concatenation with untrusted data. Design indexes for documented filters and pagination.
+- Schema changes go through migration files committed with tests; never patch production schema manually.
+- Define constraints (NOT NULL, FK, UNIQUE, checks) at the database boundary. Explicitly model provenance, owner separation, visibility and evidence status transitions.
+- Make reversible changes when feasible; for destructive/locking migrations require expansion/backfill/contract plan, backup/restore verification and user approval.
+- Avoid unbounded rows or transactions, N+1 queries, silent cascading deletes and logging sensitive payloads.
+- Tests should run against a real disposable PostgreSQL instance; mocks are not a substitute for SQL correctness.

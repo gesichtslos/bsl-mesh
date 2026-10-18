@@ -1,0 +1,13 @@
+---
+description: "Linux/Docker Compose, infrastructure hardening and CI practices"
+globs: "Dockerfile*,compose*.yaml,compose*.yml,infra/**,.github/workflows/**,.gitlab-ci.yml"
+alwaysApply: false
+---
+# Containers and CI
+
+- Target Linux Mint developer machines and one Linux VPS; use reproducible Docker Compose with separate app, worker and PostgreSQL processes.
+- Pin major image and package versions and use lockfiles; do not use `latest` in production. Keep secrets out of images, git history and build logs.
+- Bind developer database and admin interfaces to `127.0.0.1`; never expose PostgreSQL directly on the public interface. Public ingress through HTTPS reverse proxy.
+- Use least-privileged containers, healthchecks, shutdown/restart policies and explicit persistent volumes. Do not mount host Docker socket or arbitrary host directories into app containers.
+- CI must run lint, typecheck, unit/integration tests and build before staging deployment. Production deploy only with operator approval, backup/restore plan and smoke test.
+- On Linux Mint Docker packages may require the Ubuntu base codename (`UBUNTU_CODENAME`); don't run OS package removal or `sudo` without approval.

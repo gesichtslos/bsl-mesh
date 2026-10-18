@@ -1,0 +1,13 @@
+---
+description: "Official MCP TypeScript SDK v2 and 2026-07-28 protocol implementation"
+globs: "src/mcp/**/*.ts,tests/mcp/**/*.ts"
+alwaysApply: false
+---
+# MCP v2
+
+- For new server code use `@modelcontextprotocol/server`; optional Fastify integration uses `@modelcontextprotocol/fastify`. For real client contract tests use `@modelcontextprotocol/client`. Do not copy outdated `@modelcontextprotocol/sdk/server/mcp.js` v1 snippets.
+- Read the official SDK v2 serving guide and 2026-07-28 migration guide before writing the transport; v2 SDK alone does **not** ensure that the 2026-07-28 protocol era is negotiated. Enable/support it explicitly and verify with a real SDK client.
+- MCP is a transport adapter for the same application services REST uses. Auth/scopes, visibility, tenant isolation, rate limits, pagination and idempotency are shared invariants.
+- Default to stateless HTTP where suitable. Validate tool inputs, bound outputs and avoid private information in tool descriptions and errors. Never allow arbitrary shell execution or unrestricted filesystem access from a remote MCP call.
+- Read tools should be usable with minimum permissions. Write tools require explicit owner scopes, audit and idempotency keys; synthetic records can never prove independent reproducibility.
+- Unit tests are insufficient: test discover/list tools, a real read call, expected rejection of unauthorized writes, proper protocol negotiation and client compatibility.

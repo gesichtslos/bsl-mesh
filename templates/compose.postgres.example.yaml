@@ -1,0 +1,20 @@
+# LOCAL DEVELOPMENT ONLY. Review and adapt to the project; don't deploy as production.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bslmesh_dev
+      POSTGRES_USER: bslmesh_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in untracked .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bslmesh_dev -d bslmesh_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  pgdata:

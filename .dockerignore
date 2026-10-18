@@ -1,0 +1,17 @@
+.git
+.cursor
+.agents
+node_modules
+dist
+coverage
+backups
+dumps
+secrets
+.env
+.env.*
+!.env.example
+*.md
+!README.md
+docs
+tests
+.github

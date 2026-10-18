@@ -1,0 +1,13 @@
+---
+description: "Vitest, negative tests, static analysis and real verification"
+globs: "tests/**/*.ts,src/**/*.test.ts,src/**/*.spec.ts"
+alwaysApply: false
+---
+# Quality gates
+
+- Each behavior change needs at least a positive test, a meaningful negative test and a compatibility/authorization check where relevant.
+- Use Vitest for unit/integration tests, Fastify `inject()` for HTTP behavior and a real MCP v2 client for protocol integration. Run PostgreSQL-backed tests against disposable DB containers.
+- Prefer realistic fixtures with `source_kind=synthetic` over production exports. Never promote synthetic observations to independently verified evidence.
+- Run lint, typecheck, build and tests; record exact commands and actual pass/fail outputs. No fictional green checks.
+- Assert errors/denials, not only happy paths. Test prompt injection in tool descriptions, prohibited publication, cross-owner reads, secret redaction, retry idempotency and rollback where relevant.
+- Avoid brittle timing tests and tests requiring internet connectivity; isolate such checks and document prerequisites.

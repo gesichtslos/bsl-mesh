@@ -1,0 +1,36 @@
+{
+  "name": "bsl-mesh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": "24.22.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "lint": "eslint .",
+    "toolchain": "node scripts/check-toolchain.mjs",
+    "test": "vitest run",
+    "test:integration": "bash scripts/load-env.sh env NODE_ENV=test pnpm exec vitest run --config vitest.integration.config.ts",
+    "prepare:test-db": "bash scripts/load-env.sh node dist/prepare-test-db.js",
+    "start": "node dist/server.js",
+    "migrate": "node dist/migrate.js"
+  },
+  "dependencies": {
+    "fastify": "5.12.7",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "eslint": "9.39.5",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-eslint": "8.71.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}

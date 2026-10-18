@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: bslmesh_dev
+          POSTGRES_PASSWORD: ci-disposable
+          POSTGRES_DB: bslmesh_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bslmesh_dev -d bslmesh_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.0
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@12.14.0 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Toolchain
+        run: pnpm toolchain
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Prepare disposable test database
+        run: pnpm prepare:test-db
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://bslmesh_dev:ci-disposable@127.0.0.1:5432/bslmesh_dev
+          TEST_DATABASE_URL: postgres://bslmesh_tester:ci-disposable-test@127.0.0.1:5432/bslmesh_test
+      - name: Integration tests
+        run: pnpm test:integration
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://bslmesh_dev:ci-disposable@127.0.0.1:5432/bslmesh_dev
+          TEST_DATABASE_URL: postgres://bslmesh_tester:ci-disposable-test@127.0.0.1:5432/bslmesh_test

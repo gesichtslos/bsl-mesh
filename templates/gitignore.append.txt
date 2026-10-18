@@ -1,0 +1,13 @@
+# Copy/merge into root .gitignore after reviewing existing rules.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+backups/
+dumps/
+node_modules/
+dist/
+coverage/
+.DS_Store

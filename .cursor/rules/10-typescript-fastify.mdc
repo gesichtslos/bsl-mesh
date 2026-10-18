@@ -1,0 +1,16 @@
+---
+description: "Strict TypeScript, Fastify v5 API, modular monolith conventions"
+globs: "src/**/*.ts,tests/**/*.ts"
+alwaysApply: false
+---
+# TypeScript + Fastify
+
+- Use Node.js 24 LTS, ESM and TypeScript strict checking. Set `noUncheckedIndexedAccess`; type external inputs as `unknown` until validated. Avoid `any`, unsafe casts and ts-ignore.
+- Prefer `module: NodeNext`, `moduleResolution: NodeNext`, and explicit `.js` extensions on relative ESM imports if compiling directly with `tsc` for Node. Keep Node types explicit (`types: ["node"]`, required for TS >= 6 in v2 MCP projects).
+- Separate HTTP transport and schemas from application services and repositories; no business logic in route handlers and no duplicate REST/MCP business logic.
+- Every HTTP route has documented input/output/error schemas, proper status codes, scopes and negative tests. Validate incoming data at the boundary using a framework-supported schema provider; runtime validation is mandatory.
+- Use Fastify plugin encapsulation deliberately. Prefer existing route/service conventions and simple dependency injection over global singletons.
+- Keep application lifecycle explicit: startup and shutdown hooks, managed DB pool, readiness / liveness distinction, timeouts and cancellation where needed.
+- Use parameterized SQL, bounded pagination, narrow selects and server-side redacted structured logs.
+- For public machine-readable endpoints (`/start`, `/agent/*`), provide useful content without JavaScript, login or an MCP client; do not fabricate recommendation evidence.
+- Do not add a frontend framework or additional API framework without a demonstrated use case.

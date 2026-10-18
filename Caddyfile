@@ -1,0 +1,13 @@
+{
+	admin off
+	auto_https off
+}
+
+http://localhost {
+	reverse_proxy app:3000
+}
+
+https://localhost {
+	tls internal
+	reverse_proxy app:3000
+}

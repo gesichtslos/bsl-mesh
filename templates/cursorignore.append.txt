@@ -1,0 +1,13 @@
+# Copy/merge into root .cursorignore after reviewing existing rules.
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/secrets/**
+**/backups/**
+**/dumps/**
+**/*.sql.gz
+node_modules/
+dist/
+coverage/
