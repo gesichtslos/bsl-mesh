@@ -86,31 +86,127 @@ function isIgnorablePassword(password) {
   return PLACEHOLDER_PASSWORDS.has(password) || password.startsWith('change-me-');
 }
 
-function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8' });
+function git(args, cwd = process.cwd()) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
 }
 
-function trackedFiles() {
-  return git(['ls-files', '-z']).split('\0').filter((file) => file !== '');
+function gitBuffer(args, cwd = process.cwd()) {
+  return execFileSync('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
 }
 
-function stagedFiles() {
-  return git(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'])
+function trackedFiles(cwd = process.cwd()) {
+  return git(['ls-files', '-z'], cwd).split('\0').filter((file) => file !== '');
+}
+
+function stagedFiles(cwd = process.cwd()) {
+  return git(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], cwd)
     .split('\0')
     .filter((file) => file !== '');
 }
 
-function main() {
-  const mode = process.argv.includes('--staged') ? 'staged' : 'tracked';
-  const files = mode === 'staged' ? stagedFiles() : trackedFiles();
-  const findings = scanFiles(files);
-  if (findings.length > 0) {
-    process.stderr.write(`${formatFindings(findings).join('\n')}\n`);
+function commitsInRange(remoteSha, localSha, cwd) {
+  if (remoteSha === undefined || remoteSha === '' || /^0+$/.test(remoteSha)) {
+    return git(['rev-list', localSha, '--not', '--remotes'], cwd).split('\n').filter((sha) => sha !== '');
+  }
+  return git(['rev-list', `${remoteSha}..${localSha}`], cwd).split('\n').filter((sha) => sha !== '');
+}
+
+function blobsAddedInCommit(sha, cwd) {
+  const diff = git(['diff-tree', '-r', '--root', '--no-commit-id', '--diff-filter=AM', sha], cwd);
+  const blobs = [];
+  for (const line of diff.split('\n')) {
+    if (line === '') {
+      continue;
+    }
+    const tab = line.indexOf('\t');
+    if (tab === -1) {
+      continue;
+    }
+    const meta = line.slice(0, tab).split(/\s+/);
+    const blob = meta[3];
+    const filePath = line.slice(tab + 1);
+    if (blob === undefined || /^0+$/.test(blob)) {
+      continue;
+    }
+    blobs.push({ blob, filePath });
+  }
+  return blobs;
+}
+
+export function scanStaged(cwd = process.cwd()) {
+  const files = stagedFiles(cwd);
+  const findings = [];
+  for (const filePath of files) {
+    let buffer;
+    try {
+      buffer = gitBuffer(['show', `:${filePath}`], cwd);
+    } catch {
+      continue;
+    }
+    if (buffer.includes(0)) {
+      continue;
+    }
+    findings.push(...scanText(buffer.toString('utf8'), filePath));
+  }
+  return { findings, count: files.length };
+}
+
+export function scanPushRange(remoteSha, localSha, cwd = process.cwd()) {
+  const commits = commitsInRange(remoteSha, localSha, cwd);
+  const findings = [];
+  const seenBlobs = new Set();
+  for (const sha of commits) {
+    const message = git(['log', '-1', '--format=%B', sha], cwd);
+    findings.push(...scanText(message, `commit ${sha} message`));
+    for (const entry of blobsAddedInCommit(sha, cwd)) {
+      if (seenBlobs.has(entry.blob)) {
+        continue;
+      }
+      seenBlobs.add(entry.blob);
+      let buffer;
+      try {
+        buffer = gitBuffer(['cat-file', 'blob', entry.blob], cwd);
+      } catch {
+        continue;
+      }
+      if (buffer.includes(0)) {
+        continue;
+      }
+      findings.push(...scanText(buffer.toString('utf8'), `${entry.filePath} at ${sha.slice(0, 12)}`));
+    }
+  }
+  return { findings, count: commits.length };
+}
+
+function report(result) {
+  if (result.findings.length > 0) {
+    process.stderr.write(`${formatFindings(result.findings).join('\n')}\n`);
     process.stderr.write('High-confidence secret patterns were found. Remove them before publishing. A later deletion does not erase Git history.\n');
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(`${cleanScanMessage(files.length)}\n`);
+  process.stdout.write(`${cleanScanMessage(result.count)}\n`);
+}
+
+function main() {
+  const rangeFlag = process.argv.indexOf('--push-range');
+  if (process.argv.includes('--staged')) {
+    report(scanStaged());
+    return;
+  }
+  if (rangeFlag !== -1) {
+    const remoteSha = process.argv[rangeFlag + 1];
+    const localSha = process.argv[rangeFlag + 2];
+    if (remoteSha === undefined || localSha === undefined) {
+      process.stderr.write('usage: node scripts/scan-secrets.mjs --push-range <remote-sha> <local-sha>\n');
+      process.exitCode = 2;
+      return;
+    }
+    report(scanPushRange(remoteSha, localSha));
+    return;
+  }
+  const files = trackedFiles();
+  report({ findings: scanFiles(files), count: files.length });
 }
 
 const executedDirectly = process.argv[1]?.endsWith('scan-secrets.mjs') === true;

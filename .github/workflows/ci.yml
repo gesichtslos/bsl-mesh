@@ -26,11 +26,20 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24.22.0
       - name: Scan tracked files for high-confidence secrets
         run: node scripts/scan-secrets.mjs
+      - name: Scan commits that this push would publish
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node scripts/scan-secrets.mjs --push-range "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          else
+            node scripts/scan-secrets.mjs --push-range "${{ github.event.before }}" "${{ github.sha }}"
+          fi
       - name: Enable pnpm
         run: corepack enable && corepack prepare pnpm@12.14.0 --activate
       - name: Install dependencies
