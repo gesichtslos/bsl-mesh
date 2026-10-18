@@ -50,8 +50,8 @@ export class KnowledgeService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async listTopics(accessToken: string | null): Promise<{ items: Record<string, unknown>[] }> {
-    await this.reader(accessToken);
+  async listTopics(accessToken: string | null, clientKey: string): Promise<{ items: Record<string, unknown>[] }> {
+    await this.reader(accessToken, clientKey);
     const result = await this.pool.query<{ slug: string; title: string; description: string }>(
       `SELECT slug, title, description FROM topics ORDER BY slug ASC`,
     );
@@ -69,8 +69,9 @@ export class KnowledgeService {
     clientType: string | undefined;
     limit: number;
     cursor: string | undefined;
+    clientKey: string;
   }): Promise<{ items: Record<string, unknown>[]; next_cursor: string | null }> {
-    await this.reader(input.accessToken);
+    await this.reader(input.accessToken, input.clientKey);
     if (input.kind === 'practice' || input.kind === 'tool') {
       return { items: [], next_cursor: null };
     }
@@ -85,8 +86,9 @@ export class KnowledgeService {
     topic: string | undefined;
     limit: number;
     cursor: string | undefined;
+    clientKey: string;
   }): Promise<{ items: Record<string, unknown>[]; next_cursor: string | null }> {
-    await this.reader(input.accessToken);
+    await this.reader(input.accessToken, input.clientKey);
     return this.listVisibleCases({
       query: undefined,
       topic: input.topic,
@@ -99,8 +101,8 @@ export class KnowledgeService {
     }, false);
   }
 
-  async getCase(accessToken: string | null, caseId: string): Promise<Record<string, unknown>> {
-    const reader = await this.reader(accessToken);
+  async getCase(accessToken: string | null, caseId: string, clientKey: string): Promise<Record<string, unknown>> {
+    const reader = await this.reader(accessToken, clientKey);
     if (!UUID.test(caseId)) {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
     }
@@ -109,7 +111,10 @@ export class KnowledgeService {
       if (row === null || !canRead(reader, row.author_owner_id, row.visibility)) {
         throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
       }
-      return this.caseView(client, row);
+      if (seesAudit(reader, row.author_owner_id)) {
+        return this.caseView(client, row, 'audit');
+      }
+      return this.caseView(client, row, 'public');
     });
   }
 
@@ -137,7 +142,7 @@ export class KnowledgeService {
       caseType: choice(input.caseType, CASE_TYPES),
       title: untrustedText(input.title, 1, 200),
       body: untrustedText(input.body, 1, 8000),
-      visibility: input.visibility === undefined ? 'public' as const : choice(input.visibility, VISIBILITIES),
+      visibility: privateVisibility(input.visibility),
       context: parseContext(input.context),
       claims: input.claims.map((claim) => this.claimDraft(claim.text, claim.context, claim.evidence)),
     };
@@ -189,7 +194,7 @@ export class KnowledgeService {
         });
       }
       await this.audit(client, principal, 'knowledge.case_created', input.requestId, { case_id: caseId });
-      const body = await this.caseView(client, await this.mustCase(client, caseId));
+      const body = await this.present(client, await this.mustCase(client, caseId), principal);
       await this.finishIdempotent(client, principal.ownerId, 'case.create', input.idempotencyKey, body);
       return { statusCode: 201, body };
     });
@@ -274,7 +279,7 @@ export class KnowledgeService {
         claim_id: claim.id,
         evidence_id: evidenceId,
       });
-      const body = await this.caseView(client, await this.mustCase(client, claim.case_id));
+      const body = await this.present(client, await this.mustCase(client, claim.case_id), principal);
       await this.finishIdempotent(client, principal.ownerId, operation, input.idempotencyKey, body);
       return { statusCode: 201, body };
     });
@@ -317,7 +322,7 @@ export class KnowledgeService {
         throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
       }
       await this.insertCaseRevision(client, row.id, revision, nextTitle, nextBody, principal.agentId, current);
-      const response = await this.caseView(client, await this.mustCase(client, row.id));
+      const response = await this.present(client, await this.mustCase(client, row.id), principal);
       await this.finishIdempotent(client, principal.ownerId, 'case.revise', input.idempotencyKey, response, 200);
       return { statusCode: 200, body: response };
     });
@@ -356,13 +361,88 @@ export class KnowledgeService {
         throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
       }
       await client.query(
-        `INSERT INTO claim_revisions (id, claim_id, revision, claim_text, created_by_agent_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO claim_revisions (id, claim_id, revision, claim_text, created_by_agent_id, created_at, released)
+         VALUES ($1, $2, $3, $4, $5, $6, false)`,
         [uuidV7(current), claim.id, revision, text, principal.agentId, current],
       );
+      await this.recompute(client, { ...claim, claim_text: text, current_revision: revision });
       await this.touchCase(client, claim.case_id);
-      const response = await this.caseView(client, await this.mustCase(client, claim.case_id));
+      const response = await this.present(client, await this.mustCase(client, claim.case_id), principal);
       await this.finishIdempotent(client, principal.ownerId, 'claim.revise', input.idempotencyKey, response, 200);
+      return { statusCode: 200, body: response };
+    });
+  }
+
+  async publishCase(input: {
+    accessToken: string;
+    idempotencyKey: string;
+    claimedAgentId: string | undefined;
+    requestId: string;
+    caseId: string;
+  }): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+    const principal = await this.writePrincipal(input, 'cases:write');
+    const requestHash = hashRequest({ caseId: input.caseId, action: 'publish-current' });
+    return this.withTransaction(async (client) => {
+      const replay = await this.beginIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, requestHash);
+      if (replay !== null) {
+        return { statusCode: 200, body: replay };
+      }
+      const row = await this.lockVisibleCase(client, input.caseId, principal, 'author');
+      const current = this.now();
+      await client.query(
+        `UPDATE case_revisions SET released = true WHERE case_id = $1 AND revision = $2`,
+        [row.id, row.current_revision],
+      );
+      await client.query(
+        `UPDATE cases
+         SET visibility = 'public', released_revision = current_revision, updated_at = $2
+         WHERE id = $1`,
+        [row.id, current],
+      );
+      const claims = await client.query<{ id: string; current_revision: number }>(
+        `SELECT id, current_revision FROM claims WHERE case_id = $1`,
+        [row.id],
+      );
+      for (const claim of claims.rows) {
+        await client.query(
+          `UPDATE claim_revisions SET released = true WHERE claim_id = $1 AND revision = $2`,
+          [claim.id, claim.current_revision],
+        );
+        await client.query(
+          `UPDATE claims SET released_revision = $2, updated_at = $3 WHERE id = $1`,
+          [claim.id, claim.current_revision, current],
+        );
+        await client.query(
+          `UPDATE evidence SET released = true WHERE claim_id = $1 AND claim_revision = $2`,
+          [claim.id, claim.current_revision],
+        );
+        const locked = await this.lockClaim(client, claim.id, principal);
+        const assessment = await this.assessRevision(client, locked, claim.current_revision);
+        await client.query(
+          `UPDATE claims SET status = $2, confidence = $3, classification = $4 WHERE id = $1`,
+          [claim.id, assessment.status, assessment.confidence, assessment.classification],
+        );
+        await this.storeReleasedAssessment(client, claim.id, assessment);
+      }
+      await client.query(
+        `INSERT INTO moderation_events (
+           id, object_type, object_id, action, visibility, reason, actor_agent_id, actor_owner_id, created_at
+         ) VALUES ($1, 'case', $2, 'visibility_changed', 'public', $3, $4, $5, $6)`,
+        [
+          uuidV7(current),
+          row.id,
+          'Published the current revision.',
+          principal.agentId,
+          principal.ownerId,
+          current,
+        ],
+      );
+      await this.audit(client, principal, 'knowledge.published', input.requestId, {
+        case_id: row.id,
+        visibility: 'public',
+      });
+      const response = await this.caseView(client, await this.mustCase(client, row.id), 'public');
+      await this.finishIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, response, 200);
       return { statusCode: 200, body: response };
     });
   }
@@ -377,6 +457,9 @@ export class KnowledgeService {
     reason: string;
   }): Promise<{ statusCode: number; body: Record<string, unknown> }> {
     const principal = await this.writePrincipal(input, 'cases:write');
+    if (input.visibility === 'public') {
+      throw new IdentityError(422, 'Unprocessable Entity', 'Publication releases only the current revision.');
+    }
     const visibility = choice(input.visibility, VISIBILITIES);
     const reason = untrustedText(input.reason, 10, 500);
     const requestHash = hashRequest({ caseId: input.caseId, visibility, reason });
@@ -401,7 +484,7 @@ export class KnowledgeService {
         case_id: row.id,
         visibility,
       });
-      const response = await this.caseView(client, await this.mustCase(client, row.id));
+      const response = await this.present(client, await this.mustCase(client, row.id), principal);
       await this.finishIdempotent(client, principal.ownerId, 'case.visibility', input.idempotencyKey, response, 200);
       return { statusCode: 200, body: response };
     });
@@ -435,22 +518,26 @@ export class KnowledgeService {
       client_type: string;
       topic_slug: string;
     }>(
-      `SELECT c.id, c.title, c.body_md, c.source_kind, c.updated_at,
-              cl.claim_text, cl.status, cl.confidence, cl.classification,
+      `SELECT c.id, cr.title, cr.body_md, c.source_kind, c.updated_at,
+              clr.claim_text, cl.released_status AS status, cl.released_confidence AS confidence,
+              cl.released_classification AS classification,
               ctx.form_type, ctx.application_mode, ctx.platform_version, ctx.client_type,
               t.slug AS topic_slug
        FROM cases AS c
+       JOIN case_revisions AS cr ON cr.case_id = c.id AND cr.revision = c.released_revision
        JOIN topics AS t ON t.id = c.topic_id
        JOIN contexts AS ctx ON ctx.id = c.context_id
        JOIN LATERAL (
-         SELECT claim_text, status, confidence, classification
+         SELECT id, released_revision, released_status, released_confidence, released_classification
          FROM claims
-         WHERE case_id = c.id
+         WHERE case_id = c.id AND released_revision IS NOT NULL
          ORDER BY created_at ASC, id ASC
          LIMIT 1
        ) AS cl ON true
+       JOIN claim_revisions AS clr ON clr.claim_id = cl.id AND clr.revision = cl.released_revision
        WHERE c.visibility = 'public'
-         AND ($1::text IS NULL OR c.title ILIKE '%' || $1 || '%' OR cl.claim_text ILIKE '%' || $1 || '%')
+         AND c.released_revision IS NOT NULL
+         AND ($1::text IS NULL OR cr.title ILIKE '%' || $1 || '%' OR clr.claim_text ILIKE '%' || $1 || '%')
          AND ($2::text IS NULL OR t.slug = $2)
          AND ($3::text IS NULL OR ctx.form_type = $3)
          AND ($4::text IS NULL OR ctx.application_mode = $4)
@@ -498,11 +585,11 @@ export class KnowledgeService {
     };
   }
 
-  private async reader(accessToken: string | null): Promise<AgentPrincipal | null> {
+  private async reader(accessToken: string | null, clientKey: string): Promise<AgentPrincipal | null> {
     if (accessToken === null) {
       await consumeRateLimit(this.pool, [{
         kind: 'anonymous',
-        id: 'public-read',
+        id: `public:${clientKey}`,
         limit: this.config.rateLimitPublicPerMinute,
       }], this.now());
       return null;
@@ -595,8 +682,8 @@ export class KnowledgeService {
       ],
     );
     await client.query(
-      `INSERT INTO claim_revisions (id, claim_id, revision, claim_text, created_by_agent_id, created_at)
-       VALUES ($1, $2, 1, $3, $4, $5)`,
+      `INSERT INTO claim_revisions (id, claim_id, revision, claim_text, created_by_agent_id, created_at, released)
+       VALUES ($1, $2, 1, $3, $4, $5, false)`,
       [uuidV7(input.current), claimId, input.text, input.author.agentId, input.current],
     );
     const claim = await this.lockClaim(client, claimId, input.author);
@@ -638,16 +725,17 @@ export class KnowledgeService {
     const contextId = await this.insertContext(client, draft.context, current);
     await client.query(
       `INSERT INTO evidence (
-         id, claim_id, context_id, relation, result, method, observation, limitations, source_kind,
+         id, claim_id, claim_revision, context_id, relation, result, method, observation, limitations, source_kind,
          author_agent_id, author_owner_id, context_match, substantive, actor_independent,
-         counts_as_reproduction, created_at
+         counts_as_reproduction, released, created_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-         $10, $11, $12, $13, $14, $15, $16
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15, $16, $17, $18
        )`,
       [
         evidenceId,
         claim.id,
+        claim.current_revision,
         contextId,
         draft.relation,
         draft.result,
@@ -661,6 +749,7 @@ export class KnowledgeService {
         assessed.substantive,
         assessed.actorIndependent,
         assessed.countsAsReproduction,
+        claim.released_revision !== null && claim.released_revision === claim.current_revision,
         current,
       ],
     );
@@ -668,6 +757,19 @@ export class KnowledgeService {
   }
 
   private async recompute(client: PoolClient, claim: LockedClaim): Promise<void> {
+    const assessment = await this.assessRevision(client, claim, claim.current_revision);
+    await client.query(
+      `UPDATE claims
+       SET status = $2, confidence = $3, classification = $4, updated_at = $5
+       WHERE id = $1`,
+      [claim.id, assessment.status, assessment.confidence, assessment.classification, this.now()],
+    );
+    if (claim.released_revision === claim.current_revision) {
+      await this.storeReleasedAssessment(client, claim.id, assessment);
+    }
+  }
+
+  private async assessRevision(client: PoolClient, claim: LockedClaim, revision: number): Promise<ReturnType<typeof evaluateClaim>> {
     const rows = await client.query<{
       author_owner_id: string;
       source_kind: SourceKind;
@@ -677,10 +779,11 @@ export class KnowledgeService {
       substantive: boolean;
     }>(
       `SELECT author_owner_id, source_kind, relation, result, context_match, substantive
-       FROM evidence WHERE claim_id = $1`,
-      [claim.id],
+       FROM evidence
+       WHERE claim_id = $1 AND claim_revision = $2`,
+      [claim.id, revision],
     );
-    const assessment = evaluateClaim({
+    return evaluateClaim({
       authorOwnerId: claim.author_owner_id,
       claimSourceKind: claim.source_kind,
       evidence: rows.rows.map((row) => ({
@@ -692,42 +795,93 @@ export class KnowledgeService {
         substantive: row.substantive,
       })),
     });
+  }
+
+  private async storeReleasedAssessment(
+    client: PoolClient,
+    claimId: string,
+    assessment: ReturnType<typeof evaluateClaim>,
+  ): Promise<void> {
     await client.query(
       `UPDATE claims
-       SET status = $2, confidence = $3, classification = $4, updated_at = $5
+       SET released_status = $2, released_confidence = $3, released_classification = $4
        WHERE id = $1`,
-      [claim.id, assessment.status, assessment.confidence, assessment.classification, this.now()],
+      [claimId, assessment.status, assessment.confidence, assessment.classification],
     );
   }
 
-  private async caseView(client: PoolClient, row: CaseRow): Promise<Record<string, unknown>> {
+  private async present(client: PoolClient, row: CaseRow, principal: AgentPrincipal): Promise<Record<string, unknown>> {
+    if (seesAudit(principal, row.author_owner_id)) {
+      return this.caseView(client, row, 'audit');
+    }
+    if (row.visibility === 'public' && row.released_revision !== null) {
+      return this.caseView(client, row, 'public');
+    }
+    return {
+      id: row.id,
+      visibility: row.visibility,
+      current_revision: row.current_revision,
+      released_revision: row.released_revision,
+    };
+  }
+
+  private async caseView(client: PoolClient, row: CaseRow, audience: 'audit' | 'public'): Promise<Record<string, unknown>> {
     const topic = await client.query<{ slug: string; title: string }>(
       `SELECT slug, title FROM topics WHERE id = $1`,
       [row.topic_id],
     );
     const context = await this.contextById(client, row.context_id);
-    const revisions = await client.query<{ revision: number; title: string; body_md: string; created_at: Date }>(
-      `SELECT revision, title, body_md, created_at
-       FROM case_revisions WHERE case_id = $1 ORDER BY revision ASC`,
-      [row.id],
+    const revisions = await client.query<{
+      revision: number;
+      title: string;
+      body_md: string;
+      released: boolean;
+      created_at: Date;
+    }>(
+      `SELECT revision, title, body_md, released, created_at
+       FROM case_revisions
+       WHERE case_id = $1 AND ($2::boolean OR released = true)
+       ORDER BY revision ASC`,
+      [row.id, audience === 'audit'],
     );
+    const snapshot = audience === 'public'
+      ? revisions.rows.find((item) => item.revision === row.released_revision) ?? null
+      : null;
     const claims = await client.query<ClaimRow>(
       `SELECT id, claim_text, status, confidence, classification, source_kind, current_revision,
+              released_revision, released_status, released_confidence, released_classification,
               author_agent_id, author_owner_id, context_id, created_at
        FROM claims WHERE case_id = $1 ORDER BY created_at ASC, id ASC`,
       [row.id],
     );
     const claimViews = [];
     for (const claim of claims.rows) {
-      const claimRevisions = await client.query<{ revision: number; claim_text: string; created_at: Date }>(
-        `SELECT revision, claim_text, created_at FROM claim_revisions WHERE claim_id = $1 ORDER BY revision ASC`,
-        [claim.id],
+      if (audience === 'public' && claim.released_revision === null) {
+        continue;
+      }
+      const shownRevision = audience === 'public' ? claim.released_revision : claim.current_revision;
+      const claimRevisions = await client.query<{
+        revision: number;
+        claim_text: string;
+        released: boolean;
+        created_at: Date;
+      }>(
+        `SELECT revision, claim_text, released, created_at
+         FROM claim_revisions
+         WHERE claim_id = $1 AND ($2::boolean OR released = true)
+         ORDER BY revision ASC`,
+        [claim.id, audience === 'audit'],
       );
+      const shownText = claimRevisions.rows.find((item) => item.revision === shownRevision)?.claim_text
+        ?? claim.claim_text;
       const evidence = await client.query<EvidenceRow>(
         `SELECT id, relation, result, method, observation, limitations, source_kind, context_match,
-                actor_independent, counts_as_reproduction, context_id, created_at
-         FROM evidence WHERE claim_id = $1 ORDER BY created_at ASC, id ASC`,
-        [claim.id],
+                actor_independent, counts_as_reproduction, claim_revision, released, context_id, created_at
+         FROM evidence
+         WHERE claim_id = $1
+           AND ($2::boolean OR (released = true AND claim_revision = $3))
+         ORDER BY created_at ASC, id ASC`,
+        [claim.id, audience === 'audit', shownRevision],
       );
       const evidenceViews = [];
       for (const item of evidence.rows) {
@@ -742,22 +896,24 @@ export class KnowledgeService {
           context_match: item.context_match,
           actor_independent: item.actor_independent,
           counts_as_reproduction: item.counts_as_reproduction,
+          claim_revision: item.claim_revision,
           context: await this.contextById(client, item.context_id),
           created_at: item.created_at.toISOString(),
         });
       }
       claimViews.push({
         id: claim.id,
-        claim_text: claim.claim_text,
-        status: claim.status,
-        confidence: claim.confidence,
-        classification: claim.classification,
+        claim_text: shownText,
+        status: audience === 'public' ? claim.released_status : claim.status,
+        confidence: audience === 'public' ? claim.released_confidence : claim.confidence,
+        classification: audience === 'public' ? claim.released_classification : claim.classification,
         source_kind: claim.source_kind,
-        current_revision: claim.current_revision,
+        current_revision: audience === 'public' ? claim.released_revision : claim.current_revision,
         created_at: claim.created_at.toISOString(),
         revisions: claimRevisions.rows.map((revision) => ({
           revision: revision.revision,
           claim_text: revision.claim_text,
+          released: revision.released,
           created_at: revision.created_at.toISOString(),
         })),
         evidence: evidenceViews,
@@ -766,29 +922,33 @@ export class KnowledgeService {
           : [],
       });
     }
-    const moderation = await client.query<{ action: string; visibility: string; reason: string; created_at: Date }>(
-      `SELECT action, visibility, reason, created_at
-       FROM moderation_events
-       WHERE object_type = 'case' AND object_id = $1
-       ORDER BY created_at ASC`,
-      [row.id],
-    );
+    const moderation = audience === 'audit'
+      ? await client.query<{ action: string; visibility: string; reason: string; created_at: Date }>(
+        `SELECT action, visibility, reason, created_at
+         FROM moderation_events
+         WHERE object_type = 'case' AND object_id = $1
+         ORDER BY created_at ASC`,
+        [row.id],
+      )
+      : { rows: [] };
     return {
       id: row.id,
       type: row.case_type,
-      title: row.title,
-      body_md: row.body_md,
+      title: snapshot?.title ?? row.title,
+      body_md: snapshot?.body_md ?? row.body_md,
       visibility: row.visibility,
       source_kind: row.source_kind,
       topic: topic.rows[0] ?? null,
       context,
-      current_revision: row.current_revision,
+      current_revision: audience === 'public' ? row.released_revision : row.current_revision,
+      released_revision: row.released_revision,
       created_at: row.created_at.toISOString(),
       updated_at: row.updated_at.toISOString(),
       revisions: revisions.rows.map((revision) => ({
         revision: revision.revision,
         title: revision.title,
         body_md: revision.body_md,
+        released: revision.released,
         created_at: revision.created_at.toISOString(),
       })),
       claims: claimViews,
@@ -815,7 +975,7 @@ export class KnowledgeService {
       [caseId],
     );
     const row = result.rows[0];
-    if (row === undefined || !canRead(principal, row.author_owner_id, row.visibility)) {
+    if (row === undefined || !canMutate(principal, row.author_owner_id, row.visibility)) {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
     }
     if (mode === 'author' && row.author_owner_id !== principal.ownerId) {
@@ -829,7 +989,8 @@ export class KnowledgeService {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
     }
     const result = await client.query<LockedClaim>(
-      `SELECT id, case_id, context_id, claim_text, source_kind, author_owner_id
+      `SELECT id, case_id, context_id, claim_text, source_kind, author_owner_id,
+              current_revision, released_revision
        FROM claims WHERE id = $1 FOR UPDATE`,
       [claimId],
     );
@@ -1018,6 +1179,7 @@ type CaseRow = {
   author_agent_id: string;
   author_owner_id: string;
   current_revision: number;
+  released_revision: number | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -1029,13 +1191,17 @@ type LockedClaim = {
   claim_text: string;
   source_kind: SourceKind;
   author_owner_id: string;
+  current_revision: number;
+  released_revision: number | null;
 };
 
 type ClaimRow = LockedClaim & {
   status: string;
   confidence: string;
   classification: string;
-  current_revision: number;
+  released_status: string | null;
+  released_confidence: string | null;
+  released_classification: string | null;
   author_agent_id: string;
   created_at: Date;
 };
@@ -1051,18 +1217,43 @@ type EvidenceRow = {
   context_match: string;
   actor_independent: boolean;
   counts_as_reproduction: boolean;
+  claim_revision: number;
+  released: boolean;
   context_id: string;
   created_at: Date;
 };
 
 const CASE_COLUMNS = `SELECT id, topic_id, context_id, case_type, title, body_md, visibility, source_kind,
-  author_agent_id, author_owner_id, current_revision, created_at, updated_at`;
+  author_agent_id, author_owner_id, current_revision, released_revision, created_at, updated_at`;
+
+function seesAudit(reader: AgentPrincipal | null, authorOwnerId: string): boolean {
+  return reader !== null
+    && reader.ownerId === authorOwnerId
+    && reader.scopes.includes('knowledge:read');
+}
 
 function canRead(reader: AgentPrincipal | null, authorOwnerId: string, visibility: Visibility): boolean {
   if (visibility === 'public') {
     return true;
   }
-  return reader !== null && reader.ownerId === authorOwnerId;
+  return seesAudit(reader, authorOwnerId);
+}
+
+function canMutate(principal: AgentPrincipal, authorOwnerId: string, visibility: Visibility): boolean {
+  if (principal.ownerId === authorOwnerId) {
+    return true;
+  }
+  return visibility === 'public';
+}
+
+function privateVisibility(value: string | undefined): Visibility {
+  if (value === undefined || value === 'private') {
+    return 'private';
+  }
+  if (value === 'public') {
+    throw new IdentityError(422, 'Unprocessable Entity', 'Publication releases only the current revision.');
+  }
+  return choice(value, VISIBILITIES);
 }
 
 function choice<T extends string>(value: string, allowed: readonly T[]): T {

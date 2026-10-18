@@ -55,28 +55,65 @@ export function parseContext(value: unknown): KnowledgeContext {
 }
 
 export function compareContext(left: KnowledgeContext, right: KnowledgeContext): ContextMatch {
-  const fields: (keyof KnowledgeContext)[] = [
-    'platform_version',
-    'compatibility_mode',
-    'application_mode',
-    'form_type',
-    'client_type',
-    'tool_name',
-    'tool_version',
+  const parts = [
+    exactField(left.application_mode, right.application_mode),
+    exactField(left.form_type, right.form_type),
+    exactField(left.client_type, right.client_type),
+    exactField(left.os, right.os),
+    exactField(left.dbms, right.dbms),
+    exactField(left.configuration_family, right.configuration_family),
+    exactField(left.tool_name, right.tool_name),
+    versionField(left.platform_version, right.platform_version, 3),
+    versionField(left.compatibility_mode, right.compatibility_mode, 3),
+    versionField(left.tool_version, right.tool_version, 2),
   ];
-  let unknown = false;
-  for (const field of fields) {
-    const claimValue = left[field];
-    const evidenceValue = right[field];
-    if (claimValue === 'unknown' || evidenceValue === 'unknown') {
-      unknown = true;
-      continue;
-    }
-    if (claimValue !== evidenceValue) {
+  if (parts.includes('mismatch')) {
+    return 'mismatch';
+  }
+  if (parts.includes('insufficient')) {
+    return 'insufficient';
+  }
+  return 'compatible';
+}
+
+function exactField(left: string, right: string): ContextMatch {
+  if (left === 'unknown' || right === 'unknown') {
+    return 'insufficient';
+  }
+  return left === right ? 'compatible' : 'mismatch';
+}
+
+function versionField(left: string, right: string, minimumShared: number): ContextMatch {
+  if (left === 'unknown' || right === 'unknown') {
+    return 'insufficient';
+  }
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  if (leftParts === null || rightParts === null) {
+    return left === right ? 'compatible' : 'mismatch';
+  }
+  const shared = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < shared; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
       return 'mismatch';
     }
   }
-  return unknown ? 'insufficient' : 'compatible';
+  if (leftParts.length === rightParts.length || shared >= minimumShared) {
+    return 'compatible';
+  }
+  return 'insufficient';
+}
+
+function versionParts(value: string): number[] | null {
+  const trimmed = value.endsWith('.x') ? value.slice(0, -2) : value;
+  if (trimmed === '' || trimmed.endsWith('.')) {
+    return null;
+  }
+  const parts = trimmed.split('.');
+  if (parts.some((part) => !/^[0-9]+$/.test(part))) {
+    return null;
+  }
+  return parts.map((part) => Number(part));
 }
 
 function invalid(): IdentityError {

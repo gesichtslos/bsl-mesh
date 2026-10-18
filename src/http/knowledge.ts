@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 
 import { IDENTITY_DETAIL, IdentityError } from '../identity/errors.js';
+import { anonymousRateKey } from '../knowledge/rate-key.js';
 import type { KnowledgeService } from '../knowledge/service.js';
 import { problemSchema } from './problem.js';
 
@@ -92,7 +93,7 @@ export const knowledgeRoutes: FastifyPluginAsync<{ service: KnowledgeService }> 
   app.get<{ Querystring: Record<string, string | number | undefined> }>(
     '/api/v1/topics',
     { schema: { response: { 200: objectResponse, ...problems } } },
-    async (request) => service.listTopics(optionalBearer(request.headers.authorization)),
+    async (request) => service.listTopics(optionalBearer(request.headers.authorization), anonymousRateKey(request.ip)),
   );
 
   app.get<{ Querystring: Record<string, string | number | undefined> }>(
@@ -109,6 +110,7 @@ export const knowledgeRoutes: FastifyPluginAsync<{ service: KnowledgeService }> 
       clientType: stringQuery(request.query, 'context.client_type'),
       limit: request.query['limit'] === undefined ? 20 : Number(request.query['limit']),
       cursor: stringQuery(request.query, 'cursor'),
+      clientKey: anonymousRateKey(request.ip),
     }),
   );
 
@@ -133,13 +135,18 @@ export const knowledgeRoutes: FastifyPluginAsync<{ service: KnowledgeService }> 
       topic: stringQuery(request.query, 'topic'),
       limit: request.query['limit'] === undefined ? 20 : Number(request.query['limit']),
       cursor: stringQuery(request.query, 'cursor'),
+      clientKey: anonymousRateKey(request.ip),
     }),
   );
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/cases/:id',
     { schema: { params: uuidParams, response: { 200: objectResponse, ...problems } } },
-    async (request) => service.getCase(optionalBearer(request.headers.authorization), request.params.id),
+    async (request) => service.getCase(
+      optionalBearer(request.headers.authorization),
+      request.params.id,
+      anonymousRateKey(request.ip),
+    ),
   );
 
   app.post<{
@@ -383,6 +390,31 @@ export const knowledgeRoutes: FastifyPluginAsync<{ service: KnowledgeService }> 
         requestId: request.id,
         claimId: request.params.id,
         text: request.body.claim_text,
+      });
+      return reply.code(result.statusCode).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { agent_id?: string } }>(
+    '/api/v1/cases/:id/publication',
+    {
+      schema: {
+        params: uuidParams,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { agent_id: { type: 'string' } },
+        },
+        response: { 200: objectResponse, ...problems },
+      },
+    },
+    async (request, reply) => {
+      const result = await service.publishCase({
+        accessToken: bearer(request.headers.authorization),
+        idempotencyKey: idempotencyKey(request.headers['idempotency-key']),
+        claimedAgentId: claimedAgent(request.body.agent_id),
+        requestId: request.id,
+        caseId: request.params.id,
       });
       return reply.code(result.statusCode).send(result.body);
     },

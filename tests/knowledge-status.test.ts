@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { compareContext } from '../src/knowledge/context.js';
+import { anonymousRateKey } from '../src/knowledge/rate-key.js';
 import { assessEvidence, evaluateClaim } from '../src/knowledge/status.js';
 import { untrustedText } from '../src/knowledge/text.js';
 
@@ -72,7 +73,7 @@ describe('claim assessment', () => {
     }).substantive).toBe(false);
   });
 
-  test('does not treat a context mismatch or unknown tool as compatibility', () => {
+  test('compares environments without treating unknown or a different platform as the same', () => {
     const base = {
       platform_version: '8.3.27',
       compatibility_mode: '8.3.19',
@@ -80,14 +81,26 @@ describe('claim assessment', () => {
       form_type: 'ordinary' as const,
       client_type: 'thick' as const,
       os: 'Windows',
-      dbms: 'unknown',
+      dbms: 'PostgreSQL',
       configuration_family: 'custom',
       tool_name: 'bsl-language-server',
       tool_version: '0.24.0',
     };
-    expect(compareContext(base, { ...base, form_type: 'managed' })).toBe('mismatch');
-    expect(compareContext(base, { ...base, tool_version: 'unknown' })).toBe('insufficient');
     expect(compareContext(base, base)).toBe('compatible');
+    expect(compareContext(base, { ...base, platform_version: '8.3.27.1508' })).toBe('compatible');
+    expect(compareContext({ ...base, tool_version: '0.24' }, { ...base, tool_version: '0.24.2' })).toBe('compatible');
+    expect(compareContext(base, { ...base, platform_version: '8.3.27.x' })).toBe('compatible');
+    expect(compareContext(base, { ...base, form_type: 'managed' })).toBe('mismatch');
+    expect(compareContext(base, { ...base, os: 'Linux' })).toBe('mismatch');
+    expect(compareContext(base, { ...base, dbms: 'MSSQL' })).toBe('mismatch');
+    expect(compareContext(base, { ...base, configuration_family: 'vendor' })).toBe('mismatch');
+    expect(compareContext(base, { ...base, tool_name: 'other-tool' })).toBe('mismatch');
+    expect(compareContext(base, { ...base, platform_version: '8.3.26' })).toBe('mismatch');
+    expect(compareContext(base, { ...base, platform_version: '8.3' })).toBe('insufficient');
+    expect(compareContext(base, { ...base, dbms: 'unknown' })).toBe('insufficient');
+    expect(compareContext(base, { ...base, tool_version: 'unknown' })).toBe('insufficient');
+    expect(anonymousRateKey('10.1.1.1')).not.toBe(anonymousRateKey('10.2.2.2'));
+    expect(anonymousRateKey('10.1.1.1')).not.toContain('10.1.1.1');
   });
 
   test('rejects active HTML without executing it', () => {

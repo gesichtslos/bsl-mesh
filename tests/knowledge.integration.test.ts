@@ -154,7 +154,7 @@ test('two owners exchange a synthetic case over HTTP without granting reproducti
   const base = `http://127.0.0.1:${address.port}`;
   const ownerA = await sessionFor(app, 'knowledge-a@example.test');
   const ownerB = await sessionFor(app, 'knowledge-b@example.test');
-  const writerA = await credentialFor(app, ownerA, ['cases:write', 'evidence:write']);
+  const writerA = await credentialFor(app, ownerA, ['cases:write', 'evidence:write', 'knowledge:read']);
   const writerB = await credentialFor(app, ownerB, ['evidence:write']);
   const created = await fetch(`${base}/api/v1/cases`, {
     method: 'POST',
@@ -179,6 +179,16 @@ test('two owners exchange a synthetic case over HTTP without granting reproducti
   if (createdBody.id === undefined || claimId === undefined) {
     throw new Error('Case was not created.');
   }
+  const published = await fetch(`${base}/api/v1/cases/${createdBody.id}/publication`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${writerA}`,
+      'content-type': 'application/json',
+      'idempotency-key': key(),
+    },
+    body: '{}',
+  });
+  expect(published.status).toBe(200);
   const refuted = await fetch(`${base}/api/v1/claims/${claimId}/evidence`, {
     method: 'POST',
     headers: {
@@ -217,7 +227,7 @@ test('two owners exchange a synthetic case over HTTP without granting reproducti
 
 test('idempotency, scopes, revocation, history, hiding, and context search', async () => {
   const session = await sessionFor(app, 'knowledge-rules@example.test');
-  const writer = await credentialFor(app, session, ['cases:write', 'evidence:write']);
+  const writer = await credentialFor(app, session, ['cases:write', 'evidence:write', 'knowledge:read']);
   const reader = await credentialFor(app, session, ['profile:read']);
   const idempotency = key();
   const payload = casePayload('Идемпотентный синтетический случай');
@@ -247,6 +257,13 @@ test('idempotency, scopes, revocation, history, hiding, and context search', asy
     `SELECT count(*)::int AS count FROM cases WHERE title = 'Идемпотентный синтетический случай'`,
   );
   expect(count.rows[0]?.count).toBe(1);
+  const closed = await app.inject({
+    method: 'GET',
+    url: `/api/v1/cases/${(first.json() as { id: string }).id}`,
+    headers: { authorization: `Bearer ${reader}` },
+  });
+  expect(closed.statusCode).toBe(404);
+  expect(JSON.stringify(closed.json())).not.toContain('Идемпотентный синтетический случай');
 
   const forbidden = await app.inject({
     method: 'POST',
@@ -313,6 +330,16 @@ test('idempotency, scopes, revocation, history, hiding, and context search', asy
   });
   expect(ordinary.statusCode).toBe(201);
   expect(managed.statusCode).toBe(201);
+  for (const created of [ordinary, managed]) {
+    const id = (created.json() as { id: string }).id;
+    const release = await app.inject({
+      method: 'POST',
+      url: `/api/v1/cases/${id}/publication`,
+      headers: { authorization: `Bearer ${writer}`, 'idempotency-key': key() },
+      payload: {},
+    });
+    expect(release.statusCode).toBe(200);
+  }
   const filtered = await app.inject({
     method: 'GET',
     url: '/api/v1/search?context.form_type=ordinary&q=в%20поиске',
@@ -341,7 +368,7 @@ test('idempotency, scopes, revocation, history, hiding, and context search', asy
 
 test('parallel writes stay singular and hostile text is stored as data', async () => {
   const session = await sessionFor(app, 'knowledge-parallel@example.test');
-  const writer = await credentialFor(app, session, ['cases:write', 'evidence:write']);
+  const writer = await credentialFor(app, session, ['cases:write', 'evidence:write', 'knowledge:read']);
   const sharedKey = key();
   const payload = casePayload('Параллельный синтетический случай');
   const [left, right] = await Promise.all([
@@ -412,6 +439,172 @@ test('parallel writes stay singular and hostile text is stored as data', async (
   });
   expect(supplied.statusCode).toBe(400);
   expect(JSON.stringify(supplied.json())).not.toContain('organic');
+});
+
+test('publishing a later revision does not reveal the private draft', async () => {
+  const secret = 'conditional-secret-alpha';
+  const session = await sessionFor(app, 'knowledge-secret@example.test');
+  const writer = await credentialFor(app, session, ['cases:write', 'knowledge:read']);
+  const profileOnly = await credentialFor(app, session, ['profile:read']);
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/v1/cases',
+    headers: { authorization: `Bearer ${writer}`, 'idempotency-key': key() },
+    payload: {
+      ...casePayload('Черновик с внутренним примечанием'),
+      body_md: `Внутренняя пометка ${secret} не для публикации.`,
+      claims: [{ text: 'Статическая проверка не гарантирует открытие обычной формы.' }],
+    },
+  });
+  expect(created.statusCode).toBe(201);
+  const caseId = (created.json() as { id: string }).id;
+  const denied = await app.inject({
+    method: 'GET',
+    url: `/api/v1/cases/${caseId}`,
+    headers: { authorization: `Bearer ${profileOnly}` },
+  });
+  expect(denied.statusCode).toBe(404);
+  expect(JSON.stringify(denied.json())).not.toContain(secret);
+  const hidden = await app.inject({
+    method: 'POST',
+    url: `/api/v1/cases/${caseId}/visibility`,
+    headers: { authorization: `Bearer ${writer}`, 'idempotency-key': key() },
+    payload: { visibility: 'private', reason: `Служебная причина ${secret}.` },
+  });
+  expect(hidden.statusCode).toBe(200);
+  const revised = await app.inject({
+    method: 'PATCH',
+    url: `/api/v1/cases/${caseId}`,
+    headers: { authorization: `Bearer ${writer}`, 'idempotency-key': key() },
+    payload: { body_md: 'Публичная редакция без внутренней пометки.' },
+  });
+  expect(revised.statusCode).toBe(200);
+  const published = await app.inject({
+    method: 'POST',
+    url: `/api/v1/cases/${caseId}/publication`,
+    headers: { authorization: `Bearer ${writer}`, 'idempotency-key': key() },
+    payload: {},
+  });
+  expect(published.statusCode).toBe(200);
+  expect(JSON.stringify(published.json())).not.toContain(secret);
+  const anonymous = await app.inject({ method: 'GET', url: `/api/v1/cases/${caseId}` });
+  const found = await app.inject({ method: 'GET', url: '/api/v1/search?q=Публичная%20редакция' });
+  const feed = await app.inject({ method: 'GET', url: '/api/v1/feed' });
+  const profileRead = await app.inject({
+    method: 'GET',
+    url: `/api/v1/cases/${caseId}`,
+    headers: { authorization: `Bearer ${profileOnly}` },
+  });
+  for (const response of [anonymous, found, feed, profileRead, published]) {
+    expect(JSON.stringify(response.json())).not.toContain(secret);
+  }
+  expect(anonymous.statusCode).toBe(200);
+  expect(profileRead.statusCode).toBe(200);
+  const audit = await app.inject({
+    method: 'GET',
+    url: `/api/v1/cases/${caseId}`,
+    headers: { authorization: `Bearer ${writer}` },
+  });
+  expect(audit.statusCode).toBe(200);
+  expect(JSON.stringify(audit.json())).toContain(secret);
+  const publicRevisions = (anonymous.json() as { revisions: Array<{ body_md: string }> }).revisions;
+  expect(publicRevisions).toHaveLength(1);
+  expect(publicRevisions[0]?.body_md).toBe('Публичная редакция без внутренней пометки.');
+});
+
+test('a new claim revision does not inherit reproduced from the previous one', async () => {
+  const organic = await buildApp(identityConfig({ KNOWLEDGE_SOURCE_KIND: 'organic' }));
+  try {
+    const ownerA = await sessionFor(organic, 'knowledge-revise-a@example.test');
+    const ownerB = await sessionFor(organic, 'knowledge-revise-b@example.test');
+    const writerA = await credentialFor(organic, ownerA, ['cases:write', 'evidence:write', 'knowledge:read']);
+    const writerB = await credentialFor(organic, ownerB, ['evidence:write']);
+    const context = {
+      platform_version: '8.3.27',
+      compatibility_mode: '8.3.19',
+      application_mode: 'ordinary',
+      form_type: 'ordinary',
+      client_type: 'thick',
+      os: 'Windows',
+      dbms: 'PostgreSQL',
+      configuration_family: 'custom',
+      tool_name: 'bsl-language-server',
+      tool_version: '0.24.2',
+    };
+    const created = await organic.inject({
+      method: 'POST',
+      url: '/api/v1/cases',
+      headers: { authorization: `Bearer ${writerA}`, 'idempotency-key': key() },
+      payload: {
+        type: 'experiment',
+        title: 'Проверка статуса следующей редакции',
+        body_md: 'Служебная проверка смены утверждения. Это не реальное воспроизведение.',
+        topic: 'reproduction',
+        context,
+        claims: [{ text: 'Форма не открывается в обычном приложении после статической проверки.' }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const caseId = (created.json() as { id: string }).id;
+    const claimId = (created.json() as { claims: Array<{ id: string }> }).claims[0]?.id;
+    if (claimId === undefined) {
+      throw new Error('Claim was not created.');
+    }
+    const release = await organic.inject({
+      method: 'POST',
+      url: `/api/v1/cases/${caseId}/publication`,
+      headers: { authorization: `Bearer ${writerA}`, 'idempotency-key': key() },
+      payload: {},
+    });
+    expect(release.statusCode).toBe(200);
+    const supported = await organic.inject({
+      method: 'POST',
+      url: `/api/v1/claims/${claimId}/evidence`,
+      headers: { authorization: `Bearer ${writerB}`, 'idempotency-key': key() },
+      payload: {
+        relation: 'supports',
+        result: 'failure',
+        method: 'Открыл отдельный обезличенный пример в толстом клиенте и записал итог.',
+        observation: 'Форма не открылась, ошибка повторилась на этом контуре.',
+        context,
+      },
+    });
+    expect(supported.statusCode).toBe(201);
+    expect((supported.json() as { claims: Array<{ status: string }> }).claims[0]?.status).toBe('reproduced');
+    const revised = await organic.inject({
+      method: 'PATCH',
+      url: `/api/v1/claims/${claimId}`,
+      headers: { authorization: `Bearer ${writerA}`, 'idempotency-key': key() },
+      payload: { claim_text: 'Форма открывается в обычном приложении после статической проверки.' },
+    });
+    expect(revised.statusCode).toBe(200);
+    const current = (revised.json() as {
+      claims: Array<{ status: string; current_revision: number; evidence: Array<{ claim_revision: number }> }>;
+    }).claims[0];
+    expect(current?.status).toBe('reported');
+    expect(current?.current_revision).toBe(2);
+    expect(current?.evidence[0]?.claim_revision).toBe(1);
+    const republished = await organic.inject({
+      method: 'POST',
+      url: `/api/v1/cases/${caseId}/publication`,
+      headers: { authorization: `Bearer ${writerA}`, 'idempotency-key': key() },
+      payload: {},
+    });
+    expect(republished.statusCode).toBe(200);
+    const publishedClaim = (republished.json() as { claims: Array<{ claim_text: string; status: string; evidence: unknown[] }> }).claims[0];
+    expect(publishedClaim?.claim_text).toContain('Форма открывается');
+    expect(publishedClaim?.status).toBe('reported');
+    expect(publishedClaim?.evidence).toEqual([]);
+    const audit = await organic.inject({
+      method: 'GET',
+      url: `/api/v1/cases/${caseId}`,
+      headers: { authorization: `Bearer ${writerA}` },
+    });
+    const historical = (audit.json() as { claims: Array<{ evidence: Array<{ claim_revision: number; counts_as_reproduction: boolean }> }> }).claims[0];
+    expect(historical?.evidence.some((item) => item.claim_revision === 1 && item.counts_as_reproduction)).toBe(true);
+  } finally {
+    await organic.close();
+  }
 });
 
 async function writerCredentialId(pool: Pool, token: string): Promise<string> {
