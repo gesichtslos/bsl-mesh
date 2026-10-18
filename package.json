@@ -11,9 +11,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "lint": "eslint .",
-    "toolchain": "node scripts/check-toolchain.mjs",
+    "toolchain": "node --experimental-strip-types scripts/check-toolchain.mjs",
     "test": "vitest run",
     "test:integration": "bash scripts/load-env.sh env NODE_ENV=test pnpm exec vitest run --config vitest.integration.config.ts",
+    "ensure:db-roles": "bash scripts/load-env.sh node dist/ensure-db-roles.js",
     "prepare:test-db": "bash scripts/load-env.sh node dist/prepare-test-db.js",
     "start": "node dist/server.js",
     "migrate": "node dist/migrate.js"

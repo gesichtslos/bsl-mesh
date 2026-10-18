@@ -1,8 +1,10 @@
 import { expect, test } from 'vitest';
+import { Client } from 'pg';
 
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { migrate } from '../src/db/migrate.js';
+import { buildDatabaseUrl, resolveDatabaseUrl } from '../src/db/database-url.js';
+import { MIGRATION_ADVISORY_LOCK_KEY, MigrationLockError, migrate } from '../src/db/migrate.js';
 import { createPool } from '../src/db/pool.js';
 import {
   resetDisposableSchema,
@@ -105,5 +107,84 @@ test('the tester cannot open the application database', async () => {
     expect(message.toLowerCase()).toMatch(/permission denied|not permitted/);
   } finally {
     await pool.end();
+  }
+});
+
+test('the application role is not a superuser and can run migrations', async () => {
+  const pool = createPool(resolveDatabaseUrl(process.env));
+  try {
+    const identity = await pool.query<{ username: string; is_superuser: boolean }>(
+      `SELECT current_user AS username, rolsuper AS is_superuser
+       FROM pg_roles
+       WHERE rolname = current_user`,
+    );
+    expect(identity.rows[0]?.username).toBe('bslmesh_app');
+    expect(identity.rows[0]?.is_superuser).toBe(false);
+    const result = await migrate(pool);
+    expect(result.applied).toEqual([]);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('a concurrent migration does not enter the schema change', async () => {
+  const testUrl = process.env['TEST_DATABASE_URL'];
+  if (testUrl === undefined) {
+    throw new Error('TEST_DATABASE_URL is required.');
+  }
+  const holder = createPool(testUrl);
+  const runner = createPool(testUrl);
+  const client = await holder.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock($1::bigint)', [MIGRATION_ADVISORY_LOCK_KEY]);
+    await expect(migrate(runner)).rejects.toBeInstanceOf(MigrationLockError);
+  } finally {
+    await client.query('SELECT pg_advisory_unlock($1::bigint)', [MIGRATION_ADVISORY_LOCK_KEY]);
+    client.release();
+    await holder.end();
+    await runner.end();
+  }
+});
+
+test('a password with reserved characters still authenticates', async () => {
+  const adminUrl = process.env['ADMIN_DATABASE_URL'];
+  const testUrl = process.env['TEST_DATABASE_URL'];
+  if (adminUrl === undefined || testUrl === undefined) {
+    throw new Error('ADMIN_DATABASE_URL and TEST_DATABASE_URL are required.');
+  }
+  const password = 'a@b:c/d#e%f g';
+  const role = 'bslmesh_urlcheck';
+  const admin = new Client({ connectionString: adminUrl });
+  const databaseName = new URL(testUrl).pathname.replace(/^\//, '');
+  await admin.connect();
+  await admin.query(`REVOKE ALL ON DATABASE ${databaseName} FROM bslmesh_urlcheck`).catch(() => undefined);
+  await admin.query('DROP ROLE IF EXISTS bslmesh_urlcheck');
+  const clientUrl = buildDatabaseUrl({
+    username: role,
+    password,
+    host: new URL(adminUrl).hostname,
+    port: Number(new URL(adminUrl).port || '5432'),
+    database: databaseName,
+  });
+  const client = new Client({ connectionString: clientUrl });
+  try {
+    const formatted = await admin.query<{ command: string }>(
+      `SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB PASSWORD %L', $1::text, $2::text) AS command`,
+      [role, password],
+    );
+    const command = formatted.rows[0]?.command;
+    if (command === undefined) {
+      throw new Error('Could not build the URL-check role statement.');
+    }
+    await admin.query(command);
+    await admin.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${databaseName} TO ${role}`);
+    await client.connect();
+    const identity = await client.query<{ username: string }>('SELECT current_user AS username');
+    expect(identity.rows[0]?.username).toBe(role);
+  } finally {
+    await client.end().catch(() => undefined);
+    await admin.query(`REVOKE ALL ON DATABASE ${databaseName} FROM bslmesh_urlcheck`).catch(() => undefined);
+    await admin.query('DROP ROLE IF EXISTS bslmesh_urlcheck');
+    await admin.end();
   }
 });

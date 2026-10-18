@@ -2,11 +2,13 @@ import { Client } from 'pg';
 
 import { redactDatabaseUrl } from './redact.js';
 import { assertTestDatabaseIdentity, readDatabaseTarget } from './test-database.js';
+import { resolveDatabaseUrl } from './database-url.js';
 
 export async function prepareTestDatabase(env: NodeJS.ProcessEnv): Promise<void> {
   const test = assertTestDatabaseIdentity(env);
-  const application = readDatabaseTarget(requiredText(env, 'DATABASE_URL'), 'DATABASE_URL');
-  const admin = new Client({ connectionString: withDatabase(application.connectionString, 'postgres') });
+  const application = readDatabaseTarget(resolveDatabaseUrl(env), 'DATABASE_URL');
+  const adminUrl = requiredText(env, 'ADMIN_DATABASE_URL');
+  const admin = new Client({ connectionString: withDatabase(adminUrl, 'postgres') });
   await admin.connect();
   try {
     const identity = await admin.query<{ is_superuser: boolean }>(
@@ -15,7 +17,7 @@ export async function prepareTestDatabase(env: NodeJS.ProcessEnv): Promise<void>
        WHERE rolname = current_user`,
     );
     if (identity.rows[0]?.is_superuser !== true) {
-      throw new Error('Preparing the test database requires a superuser application role.');
+      throw new Error('Preparing the test database requires the administrative superuser.');
     }
     await ensureRole(admin, test.username, passwordOf(test.connectionString));
     await ensureDatabase(admin, test.databaseName, test.username, false);
@@ -28,16 +30,16 @@ export async function prepareTestDatabase(env: NodeJS.ProcessEnv): Promise<void>
     await admin.query(
       `GRANT CONNECT, TEMPORARY, CREATE ON DATABASE ${quoteIdent(test.databaseName)} TO ${quoteIdent(test.username)}`,
     );
+    const owner = new Client({ connectionString: withDatabase(adminUrl, test.databaseName) });
+    await owner.connect();
+    try {
+      await owner.query(`ALTER SCHEMA public OWNER TO ${quoteIdent(test.username)}`);
+      await owner.query(`GRANT ALL ON SCHEMA public TO ${quoteIdent(test.username)}`);
+    } finally {
+      await owner.end();
+    }
   } finally {
     await admin.end();
-  }
-  const owner = new Client({ connectionString: withDatabase(application.connectionString, test.databaseName) });
-  await owner.connect();
-  try {
-    await owner.query(`ALTER SCHEMA public OWNER TO ${quoteIdent(test.username)}`);
-    await owner.query(`GRANT ALL ON SCHEMA public TO ${quoteIdent(test.username)}`);
-  } finally {
-    await owner.end();
   }
 }
 

@@ -9,14 +9,16 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: bslmesh_dev
-      POSTGRES_USER: bslmesh_dev
+      POSTGRES_USER: bslmesh_admin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in untracked .env}
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in untracked .env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bslmesh_dev -d bslmesh_dev"]
+      test: ["CMD-SHELL", "pg_isready -U bslmesh_admin -d bslmesh_dev"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -32,7 +34,11 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
-      DATABASE_URL: postgres://bslmesh_dev:${POSTGRES_PASSWORD}@db:5432/bslmesh_dev
+      PGUSER: bslmesh_app
+      PGPASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in untracked .env}
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: bslmesh_dev
       LOG_LEVEL: info
       NODE_ENV: production
     expose:
