@@ -25,4 +25,14 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ['docs/examples/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        URL: 'readonly',
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
+  },
 );

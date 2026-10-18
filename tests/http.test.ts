@@ -53,15 +53,21 @@ describe('http foundation', () => {
     expect(JSON.stringify(body)).not.toContain(DB_PASSWORD);
   });
 
-  test('capabilities report only the implemented health feature', async () => {
+  test('capabilities report the implemented MCP protocol and closed OAuth', async () => {
     const app = await buildApp(testConfig());
     apps.push(app);
     const response = await app.inject({ method: 'GET', url: '/api/v1/capabilities' });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       api_version: '0.1.0',
-      mcp: 'unsupported',
-      features: ['health', 'identity', 'knowledge'],
+      mcp: {
+        protocol: '2026-07-28',
+        transport: 'streamable-http',
+        endpoint: '/mcp',
+        auth: 'bearer-credential',
+        oauth: 'unsupported',
+      },
+      features: ['health', 'identity', 'knowledge', 'mcp'],
     });
   });
 

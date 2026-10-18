@@ -13,6 +13,7 @@ import { healthRoutes } from './http/health.js';
 import { identityRoutes } from './http/identity.js';
 import { knowledgeRoutes } from './http/knowledge.js';
 import { problem } from './http/problem.js';
+import { registerMcpRoute } from './mcp/route.js';
 import { KnowledgeService } from './knowledge/service.js';
 
 const REDACT = [
@@ -73,7 +74,10 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   app.addHook('onClose', async () => {
     await pool.end();
   });
-  app.addHook('onSend', async (_request, reply, payload) => {
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (request.url.split('?')[0] === '/mcp') {
+      return payload;
+    }
     if (reply.statusCode >= 400) {
       reply.type('application/problem+json');
     }
@@ -85,6 +89,22 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
       .send(problem(404, 'Not Found', 'No route matches this request.', request.id));
   });
   app.setErrorHandler((error: FastifyError, request, reply) => {
+    if (request.url.split('?')[0] === '/mcp') {
+      const status = error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500
+        ? error.statusCode
+        : 500;
+      request.log.error({ code: error.code, status }, 'request failed');
+      const message = status === 413
+        ? 'Payload is too large.'
+        : status === 400
+          ? 'Parse error: the request body is not valid JSON.'
+          : 'Request failed.';
+      return reply.code(status).type('application/json').send({
+        jsonrpc: '2.0',
+        error: { code: status === 400 ? -32700 : -32000, message },
+        id: null,
+      });
+    }
     if (error instanceof IdentityError) {
       for (const [name, value] of Object.entries(error.headers)) {
         reply.header(name, value);
@@ -107,14 +127,14 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   });
   const now = options.now ?? (() => new Date());
   const identity = new IdentityService(pool, config, now);
+  const knowledge = new KnowledgeService(pool, identity, config, now);
   await app.register(healthRoutes, { pool });
   await app.register(capabilitiesRoutes);
   await app.register(identityRoutes, {
     service: identity,
     magicLink: magicLinkRoute(config),
   });
-  await app.register(knowledgeRoutes, {
-    service: new KnowledgeService(pool, identity, config, now),
-  });
+  await app.register(knowledgeRoutes, { service: knowledge });
+  registerMcpRoute(app, { knowledge, identity, pool, config, now });
   return app;
 }
