@@ -1,10 +1,14 @@
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { expect, test } from 'vitest';
 import { Client } from 'pg';
 
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { buildDatabaseUrl, decodedDatabasePassword, resolveDatabaseUrl } from '../src/db/database-url.js';
-import { MIGRATION_ADVISORY_LOCK_KEY, MigrationLockError, migrate } from '../src/db/migrate.js';
+import { MIGRATION_ADVISORY_LOCK_KEY, MigrationLockError, migrate, migrationsDirectory } from '../src/db/migrate.js';
 import { createPool } from '../src/db/pool.js';
 import {
   resetDisposableSchema,
@@ -55,15 +59,15 @@ test('migrations apply once on the disposable database and readiness sees it', a
     await resetDisposableSchema(sqlClient(pool), process.env);
     const first = await migrate(pool);
     const second = await migrate(pool);
-    expect(first.applied).toEqual(['001_app_meta.sql']);
+    expect(first.applied).toEqual(['001_app_meta.sql', '002_identity.sql']);
     expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(['001_app_meta.sql']);
+    expect(second.skipped).toEqual(['001_app_meta.sql', '002_identity.sql']);
 
     const migrations = await pool.query<{ count: number }>('SELECT count(*)::int AS count FROM schema_migrations');
     const meta = await pool.query<{ service_name: string; count: number }>(
       'SELECT service_name, count(*)::int AS count FROM app_meta GROUP BY service_name',
     );
-    expect(migrations.rows[0]?.count).toBe(1);
+    expect(migrations.rows[0]?.count).toBe(2);
     expect(meta.rows[0]?.service_name).toBe('bsl-mesh');
     expect(meta.rows[0]?.count).toBe(1);
 
@@ -151,12 +155,22 @@ test('the application role is not a superuser and migrations are idempotent on a
   });
   const pool = createPool(freshUrl);
   try {
-    const first = await migrate(pool);
-    const second = await migrate(pool);
-    expect(first.applied).toEqual(['001_app_meta.sql']);
-    expect(first.skipped).toEqual([]);
-    expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(['001_app_meta.sql']);
+    const source = migrationsDirectory();
+    const partial = await mkdtemp(path.join(tmpdir(), 'bslmesh-migrate-'));
+    try {
+      await copyFile(path.join(source, '001_app_meta.sql'), path.join(partial, '001_app_meta.sql'));
+      const baseline = await migrate(pool, partial);
+      const upgraded = await migrate(pool, source);
+      const repeated = await migrate(pool, source);
+      expect(baseline.applied).toEqual(['001_app_meta.sql']);
+      expect(baseline.skipped).toEqual([]);
+      expect(upgraded.applied).toEqual(['002_identity.sql']);
+      expect(upgraded.skipped).toEqual(['001_app_meta.sql']);
+      expect(repeated.applied).toEqual([]);
+      expect(repeated.skipped).toEqual(['001_app_meta.sql', '002_identity.sql']);
+    } finally {
+      await rm(partial, { recursive: true, force: true });
+    }
   } finally {
     await pool.end();
     const cleanup = new Client({ connectionString: adminUrl });

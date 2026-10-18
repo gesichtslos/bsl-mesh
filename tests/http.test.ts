@@ -61,7 +61,7 @@ describe('http foundation', () => {
     expect(response.json()).toEqual({
       api_version: '0.1.0',
       mcp: 'unsupported',
-      features: ['health'],
+      features: ['health', 'identity'],
     });
   });
 

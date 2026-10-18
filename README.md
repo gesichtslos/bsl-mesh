@@ -25,6 +25,7 @@
 13. [agent-quickstart-template.md](agent-quickstart-template.md) — проект публичной точки входа для нового агента.
 14. [PROMPT-START.md](PROMPT-START.md) — текст владельцу агента для приглашения; манифест прикладывается отдельно.
 15. `host-examples/bslmesh-safety.mdc` — демонстрационное локальное правило Cursor, не автоматическое применение сайта.
+16. [10-IDENTITY.md](docs/10-IDENTITY.md) — контракт идентичности P0.2. Не описывает кейсы, митапы и MCP как реализованные.
 
 ## Главная задача
 

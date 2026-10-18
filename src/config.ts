@@ -6,12 +6,22 @@ const NODE_ENVS = ['development', 'test', 'production'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 export type NodeEnv = (typeof NODE_ENVS)[number];
 
+export type OidcConfig = {
+  issuer: string;
+  clientId: string;
+};
+
 export type AppConfig = {
   host: string;
   port: number;
   databaseUrl: string;
   logLevel: LogLevel;
   nodeEnv: NodeEnv;
+  authPublicRegistration: false;
+  authTestAdapter: boolean;
+  oidc: OidcConfig | null;
+  rateLimitAgentPerMinute: number;
+  rateLimitOwnerPerMinute: number;
 };
 
 export class ConfigError extends Error {
@@ -22,12 +32,18 @@ export class ConfigError extends Error {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const nodeEnv = requiredEnum(env, 'NODE_ENV', NODE_ENVS);
   return {
     host: requiredText(env, 'HOST'),
     port: requiredPort(env),
     databaseUrl: requiredDatabaseUrl(env),
     logLevel: requiredEnum(env, 'LOG_LEVEL', LOG_LEVELS),
-    nodeEnv: requiredEnum(env, 'NODE_ENV', NODE_ENVS),
+    nodeEnv,
+    authPublicRegistration: closedPublicRegistration(env),
+    authTestAdapter: readTestAdapter(env, nodeEnv),
+    oidc: readOidc(env),
+    rateLimitAgentPerMinute: readLimit(env, 'RATE_LIMIT_AGENT_PER_MINUTE', 60),
+    rateLimitOwnerPerMinute: readLimit(env, 'RATE_LIMIT_OWNER_PER_MINUTE', 120),
   };
 }
 
@@ -64,6 +80,76 @@ function requiredDatabaseUrl(env: NodeJS.ProcessEnv): string {
     }
     throw new ConfigError(error instanceof Error ? error.message : 'DATABASE_URL is required.');
   }
+}
+
+function closedPublicRegistration(env: NodeJS.ProcessEnv): false {
+  const value = env['AUTH_PUBLIC_REGISTRATION']?.trim() ?? '';
+  if (value === '' || value === 'false') {
+    return false;
+  }
+  throw new ConfigError(
+    'Public registration cannot be enabled until a reviewed identity provider is configured.',
+  );
+}
+
+function readTestAdapter(env: NodeJS.ProcessEnv, nodeEnv: NodeEnv): boolean {
+  const value = env['AUTH_TEST_ADAPTER']?.trim() ?? '';
+  if (value === '' || value === 'disabled') {
+    return false;
+  }
+  if (value !== 'enabled') {
+    throw new ConfigError('AUTH_TEST_ADAPTER must be enabled or disabled.');
+  }
+  if (nodeEnv === 'production') {
+    throw new ConfigError('AUTH_TEST_ADAPTER cannot be enabled when NODE_ENV is production.');
+  }
+  return true;
+}
+
+function readLimit(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name]?.trim() ?? '';
+  if (raw === '') {
+    return fallback;
+  }
+  if (!/^[0-9]+$/.test(raw)) {
+    throw new ConfigError(`${name} must be an integer from 1 to 100000.`);
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 100_000) {
+    throw new ConfigError(`${name} must be an integer from 1 to 100000.`);
+  }
+  return value;
+}
+
+function readOidc(env: NodeJS.ProcessEnv): OidcConfig | null {
+  const issuerRaw = env['AUTH_OIDC_ISSUER']?.trim() ?? '';
+  const clientRaw = env['AUTH_OIDC_CLIENT_ID']?.trim() ?? '';
+  if (issuerRaw === '' && clientRaw === '') {
+    return null;
+  }
+  if (issuerRaw === '' || clientRaw === '') {
+    throw new ConfigError('AUTH_OIDC_ISSUER and AUTH_OIDC_CLIENT_ID must be set together.');
+  }
+  let issuer: URL;
+  try {
+    issuer = new URL(issuerRaw);
+  } catch {
+    throw new ConfigError('AUTH_OIDC_ISSUER must be an https URL.');
+  }
+  if (
+    issuer.protocol !== 'https:'
+    || issuer.username !== ''
+    || issuer.password !== ''
+    || issuer.search !== ''
+    || issuer.hash !== ''
+  ) {
+    throw new ConfigError('AUTH_OIDC_ISSUER must be an https URL without credentials, query, or fragment.');
+  }
+  if (!/^[A-Za-z0-9._~-]{1,200}$/.test(clientRaw)) {
+    throw new ConfigError('AUTH_OIDC_CLIENT_ID contains unsupported characters.');
+  }
+  const pathname = issuer.pathname.replace(/\/$/, '');
+  return { issuer: `${issuer.origin}${pathname}`, clientId: clientRaw };
 }
 
 function requiredEnum<T extends string>(
