@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { assessToolchainCompatibility } from '../src/toolchain/peer-range.ts';
 
 const require = createRequire(import.meta.url);
 const failures = [];
@@ -14,7 +15,6 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 const nvmrc = readFileSync(new URL('../.nvmrc', import.meta.url), 'utf8').trim();
 const lockfile = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8');
 const typescript = require('typescript');
-const typescriptPackage = require('typescript/package.json');
 const typescriptEslint = require('typescript-eslint/package.json');
 
 if (nvmrc !== '24.22.0') {
@@ -35,43 +35,35 @@ if (pnpmVersion !== '12.14.0') {
   fail(`pnpm must be 12.14.0, found ${pnpmVersion}`);
 }
 
-const requiredLockPins = [
-  'specifier: 12.14.0',
-  'version: 12.14.0',
-  'version: typescript@7.0.2',
-  "'@typescript/typescript6@6.0.2'",
-  'fastify@5.12.7:',
-  'typescript-eslint@8.71.2:',
-];
-for (const pin of requiredLockPins) {
-  if (!lockfile.includes(pin)) {
-    fail(`pnpm-lock.yaml is missing ${pin}`);
+const compilerSpec = String(pkg.devDependencies?.['@typescript/native'] ?? '');
+const apiSpec = String(pkg.devDependencies?.typescript ?? '');
+const compilerVersion = compilerSpec.replace(/^npm:typescript@/, '');
+const apiPackage = apiSpec.replace(/^npm:/, '');
+for (const pin of ['specifier: 12.14.0', 'version: 12.14.0', compilerVersion, apiPackage, 'fastify@5.12.7:', 'typescript-eslint@8.71.2:']) {
+  if (pin === '' || !lockfile.includes(pin)) {
+    fail(`pnpm-lock.yaml is missing ${pin || 'a TypeScript pin'}`);
   }
 }
 
-if (typescriptPackage.version !== '6.0.2') {
-  fail(`typescript package pin must stay 6.0.2, found ${typescriptPackage.version}`);
-}
-if (!/^6\.0\.\d+$/.test(typescript.version)) {
-  fail(`typescript API must stay on 6.0 for typescript-eslint, found ${typescript.version}`);
-}
-if (typescriptEslint.peerDependencies?.typescript !== '>=4.8.4 <6.1.0') {
-  fail(`typescript-eslint peer range changed: ${typescriptEslint.peerDependencies?.typescript}`);
-}
-if (!peerAccepts(typescript.version, typescriptEslint.peerDependencies.typescript)) {
-  fail(`typescript ${typescript.version} does not satisfy ${typescriptEslint.peerDependencies.typescript}`);
+const peerRange = typescriptEslint.peerDependencies?.typescript;
+const compatibility = assessToolchainCompatibility({
+  compilerVersion,
+  apiVersion: typescript.version,
+  peerRange: typeof peerRange === 'string' ? peerRange : '',
+});
+if (compatibility !== undefined) {
+  fail(compatibility);
 }
 
 const tscVersion = execFileSync('pnpm', ['exec', 'tsc', '--version'], { encoding: 'utf8' }).trim();
-const tsc6Version = execFileSync('pnpm', ['exec', 'tsc6', '--version'], { encoding: 'utf8' }).trim();
-if (tscVersion !== 'Version 7.0.2') {
-  fail(`tsc must be TypeScript 7.0.2, found ${tscVersion}`);
+if (tscVersion !== `Version ${compilerVersion}`) {
+  fail(`tsc must match @typescript/native (${compilerVersion}), found ${tscVersion}`);
 }
-if (tsc6Version !== `Version ${typescript.version}`) {
-  fail(`tsc6 must report the TypeScript 6 API version, found ${tsc6Version}`);
-}
-if (majorOf(tscVersion) === majorOf(typescript.version)) {
-  fail('TypeScript 7 compiler and TypeScript 6 API resolved to the same major');
+if (major(compilerVersion) !== major(typescript.version)) {
+  const tsc6Version = execFileSync('pnpm', ['exec', 'tsc6', '--version'], { encoding: 'utf8' }).trim();
+  if (tsc6Version !== `Version ${typescript.version}`) {
+    fail(`tsc6 must report the TypeScript API version, found ${tsc6Version}`);
+  }
 }
 
 if (failures.length > 0) {
@@ -80,19 +72,8 @@ if (failures.length > 0) {
   }
   process.exit(1);
 }
-process.stdout.write(`toolchain ok: node ${process.versions.node}, pnpm ${pnpmVersion}, tsc ${tscVersion}, typescript package ${typescriptPackage.version}, typescript API ${typescript.version}\n`);
+process.stdout.write(`toolchain ok: node ${process.versions.node}, pnpm ${pnpmVersion}, tsc ${tscVersion}, typescript API ${typescript.version}, peer ${peerRange}\n`);
 
-function majorOf(version) {
-  const match = /(\d+)\./.exec(version);
-  return match?.[1] ?? '';
-}
-
-function peerAccepts(version, range) {
-  if (range !== '>=4.8.4 <6.1.0') {
-    return false;
-  }
-  const [major, minor, patch] = version.split('.').map((part) => Number(part));
-  const atLeast484 = major > 4 || (major === 4 && (minor > 8 || (minor === 8 && patch >= 4)));
-  const below61 = major < 6 || (major === 6 && minor < 1);
-  return atLeast484 && below61;
+function major(version) {
+  return version.split('.')[0] ?? '';
 }

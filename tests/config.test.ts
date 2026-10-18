@@ -33,7 +33,7 @@ describe('loadConfig', () => {
       PORT: complete.PORT,
       LOG_LEVEL: complete.LOG_LEVEL,
       NODE_ENV: complete.NODE_ENV,
-    })).toThrow('DATABASE_URL is required.');
+    })).toThrow('DATABASE_URL or PGUSER, PGPASSWORD, PGHOST, and PGDATABASE are required.');
   });
 
   test('rejects a non-postgres URL without returning the value', () => {

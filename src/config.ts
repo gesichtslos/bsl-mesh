@@ -1,3 +1,5 @@
+import { resolveDatabaseUrl } from './db/database-url.js';
+
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 const NODE_ENVS = ['development', 'test', 'production'] as const;
 
@@ -50,11 +52,18 @@ function requiredPort(env: NodeJS.ProcessEnv): number {
 }
 
 function requiredDatabaseUrl(env: NodeJS.ProcessEnv): string {
-  const value = requiredText(env, 'DATABASE_URL');
-  if (!/^postgres(?:ql)?:\/\//.test(value)) {
-    throw new ConfigError('DATABASE_URL must be a postgres URL.');
+  try {
+    const value = resolveDatabaseUrl(env);
+    if (!/^postgres(?:ql)?:\/\//.test(value)) {
+      throw new ConfigError('DATABASE_URL must be a postgres URL.');
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      throw error;
+    }
+    throw new ConfigError(error instanceof Error ? error.message : 'DATABASE_URL is required.');
   }
-  return value;
 }
 
 function requiredEnum<T extends string>(

@@ -23,12 +23,12 @@ if [ ! -s "${dump_file}" ]; then
   exit 1
 fi
 
-exists="$(docker compose exec -T db psql -U bslmesh_dev -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '${target}'")"
+exists="$(docker compose exec -T db psql -U bslmesh_admin -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '${target}'")"
 if [ "${exists}" != "1" ]; then
-  docker compose exec -T db psql -U bslmesh_dev -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${target} OWNER bslmesh_dev;"
+  docker compose exec -T db psql -U bslmesh_admin -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${target} OWNER bslmesh_admin;"
 fi
-docker compose exec -T db pg_restore -U bslmesh_dev -d "${target}" --no-owner --clean --if-exists --exit-on-error < "${dump_file}"
-service_name="$(docker compose exec -T db psql -U bslmesh_dev -d "${target}" -tAc "SELECT service_name FROM app_meta WHERE id = 1;")"
+docker compose exec -T db pg_restore -U bslmesh_admin -d "${target}" --no-owner --clean --if-exists --exit-on-error < "${dump_file}"
+service_name="$(docker compose exec -T db psql -U bslmesh_admin -d "${target}" -tAc "SELECT service_name FROM app_meta WHERE id = 1;")"
 service_name="$(printf '%s' "${service_name}" | tr -d '[:space:]')"
 if [ "${service_name}" != "bsl-mesh" ]; then
   echo "restored app_meta row was not found" >&2
