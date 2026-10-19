@@ -78,5 +78,5 @@ export const getStarterProfileInput = z.object({
 }).strict();
 
 export const getCatalogSnapshotInput = z.object({
-  catalog_version: z.string().min(1).max(40).optional(),
+  catalog_version: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();

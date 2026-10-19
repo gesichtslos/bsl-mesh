@@ -25,6 +25,7 @@ describe('loadConfig', () => {
       rateLimitOwnerPerMinute: 120,
       rateLimitPublicPerMinute: 120,
       knowledgeSourceKind: 'synthetic',
+      registryDemonstration: false,
     });
   });
 

@@ -35,6 +35,7 @@ type ProfileRow = {
   last_reviewed_at: Date | null;
   review_due_at: Date | null;
   created_at: Date;
+  presentation: string;
 };
 
 type ComponentRow = {
@@ -60,6 +61,7 @@ type ComponentRow = {
   maintainer: string;
   upstream_url: string;
   license: string;
+  presentation: string;
 };
 
 export class EnvironmentService {
@@ -80,11 +82,12 @@ export class EnvironmentService {
     const limit = boundLimit(input.limit);
     const result = await this.pool.query<ProfileRow>(
       `${PROFILE_SELECT}
-       WHERE ($1::boolean OR status <> 'withdrawn')
-       ORDER BY profile_id ASC, version DESC
-       LIMIT $2`,
-      [input.includeWithdrawn, limit],
+       WHERE ${this.publicSql('')}
+       ORDER BY profile_id ASC, string_to_array(version, '.')::int[] DESC
+       LIMIT $1`,
+      [limit],
     );
+    void input.includeWithdrawn;
     return { items: result.rows.map(profileView), next_cursor: null };
   }
 
@@ -101,7 +104,7 @@ export class EnvironmentService {
     const row = input.version === undefined
       ? await this.headProfile(input.profileId)
       : await this.profileVersion(input.profileId, input.version);
-    if (row === null) {
+    if (row === null || !this.isPublic(row.status, row.presentation)) {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
     }
     const events = await this.events('profile', row.profile_id, row.version);
@@ -123,7 +126,7 @@ export class EnvironmentService {
       [input.componentId, input.version],
     );
     const row = result.rows[0];
-    if (row === undefined) {
+    if (row === undefined || !this.isPublic(row.status, row.presentation)) {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
     }
     return componentView(row);
@@ -132,10 +135,10 @@ export class EnvironmentService {
   async catalog(input: { accessToken: string | null; clientKey: string }): Promise<Record<string, unknown>> {
     await this.reader(input.accessToken, input.clientKey);
     const profiles = await this.pool.query<ProfileRow>(
-      `${PROFILE_SELECT} ORDER BY profile_id ASC, version ASC`,
+      `${PROFILE_SELECT} WHERE ${this.publicSql('')} ORDER BY profile_id ASC, version ASC`,
     );
     const components = await this.pool.query<ComponentRow>(
-      `${COMPONENT_SELECT} ORDER BY component_id ASC, version ASC`,
+      `${COMPONENT_SELECT} WHERE ${this.publicSql('v')} ORDER BY component_id ASC, version ASC`,
     );
     const stamps = [...profiles.rows, ...components.rows].map((row) => row.created_at.getTime());
     const generatedAt = new Date(stamps.length === 0 ? this.now().getTime() : Math.max(...stamps));
@@ -191,11 +194,85 @@ export class EnvironmentService {
     }
   }
 
-  async publishSynthetic(profileId: string, version: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE profile_versions SET status = 'published' WHERE profile_id = $1 AND version = $2`,
-      [profileId, version],
-    );
+  async addComponentVersion(input: {
+    id: string;
+    kind: string;
+    name: string;
+    purpose: string;
+    maintainer: string;
+    upstreamUrl: string;
+    license: string;
+    version: string;
+    status: 'draft' | 'published';
+    sourceKind: 'organic' | 'synthetic' | 'import';
+    summary: string;
+    presentation?: 'catalog' | 'demonstration';
+  }): Promise<void> {
+    assertSafeHttpsUrl(input.upstreamUrl);
+    if (!IDENTIFIER.test(input.id) || !VERSION.test(input.version)) {
+      throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO environment_components (id, kind, name, purpose, maintainer, upstream_url, license, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO NOTHING`,
+        [input.id, input.kind, input.name, input.purpose, input.maintainer, input.upstreamUrl, input.license, this.now()],
+      );
+      await client.query(
+        `INSERT INTO component_versions (
+           component_id, version, status, source_kind, summary, hosts, requirements, limitations, risks,
+           provenance, mcp, sha256, evidence_quality, independent_owner_confirmations, last_reviewed_at, created_at,
+           kind, name, purpose, maintainer, upstream_url, license, presentation
+         ) VALUES (
+           $1, $2, $3, $4, $5, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+           '{}'::jsonb, NULL, NULL, 'insufficient_evidence', 0, NULL, $6,
+           $7, $8, $9, $10, $11, $12, $13
+         )`,
+        [
+          input.id,
+          input.version,
+          input.status,
+          input.sourceKind,
+          input.summary,
+          this.now(),
+          input.kind,
+          input.name,
+          input.purpose,
+          input.maintainer,
+          input.upstreamUrl,
+          input.license,
+          input.presentation ?? 'catalog',
+        ],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private isPublic(status: string, presentation: string): boolean {
+    const visible = status === 'published' || status === 'contested' || status === 'withdrawn' || status === 'superseded';
+    if (!visible) {
+      return false;
+    }
+    if (presentation === 'catalog') {
+      return true;
+    }
+    return this.config.registryDemonstration && presentation === 'demonstration';
+  }
+
+  private publicSql(alias: string): string {
+    const prefix = alias === '' ? '' : `${alias}.`;
+    const presentation = this.config.registryDemonstration
+      ? `${prefix}presentation IN ('catalog', 'demonstration')`
+      : `${prefix}presentation = 'catalog'`;
+    return `${prefix}status IN ('published', 'contested', 'withdrawn', 'superseded') AND ${presentation}`;
   }
 
   private async reader(accessToken: string | null, clientKey: string): Promise<void> {
@@ -213,7 +290,7 @@ export class EnvironmentService {
   private async headProfile(profileId: string): Promise<ProfileRow | null> {
     const result = await this.pool.query<ProfileRow>(
       `${PROFILE_SELECT}
-       WHERE profile_id = $1 AND status <> 'withdrawn'
+       WHERE profile_id = $1 AND ${this.publicSql('')}
        ORDER BY string_to_array(version, '.')::int[] DESC
        LIMIT 1`,
       [profileId],
@@ -248,16 +325,15 @@ export class EnvironmentService {
 const PROFILE_COLUMNS = `profile_id, version, status, source_kind, summary, tasks, hosts, applicability,
   incompatibilities, components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
   evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
-  last_reviewed_at, review_due_at, created_at`;
+  last_reviewed_at, review_due_at, created_at, presentation`;
 
 const PROFILE_SELECT = `SELECT ${PROFILE_COLUMNS} FROM profile_versions`;
 
 const COMPONENT_SELECT = `SELECT v.component_id, v.version, v.status, v.source_kind, v.summary, v.hosts,
   v.requirements, v.limitations, v.risks, v.provenance, v.mcp, v.sha256, v.evidence_quality,
   v.independent_owner_confirmations, v.last_reviewed_at, v.created_at,
-  c.kind, c.name, c.purpose, c.maintainer, c.upstream_url, c.license
-  FROM component_versions AS v
-  JOIN environment_components AS c ON c.id = v.component_id`;
+  v.kind, v.name, v.purpose, v.maintainer, v.upstream_url, v.license, v.presentation
+  FROM component_versions AS v`;
 
 function profileView(row: ProfileRow): Record<string, unknown> {
   return {
@@ -281,6 +357,7 @@ function profileView(row: ProfileRow): Record<string, unknown> {
     conflicts_of_interest: row.conflicts_of_interest,
     independent_owner_confirmations: row.independent_owner_confirmations,
     confirmed_practice: false,
+    demonstration: row.presentation === 'demonstration',
     efficiency_ranking: null,
     immutable: row.status !== 'draft' && row.status !== 'reviewed',
     last_reviewed_at: row.last_reviewed_at?.toISOString() ?? null,
@@ -313,6 +390,7 @@ function componentView(row: ComponentRow): Record<string, unknown> {
     sha256_is_trust: false,
     evidence_quality: row.evidence_quality,
     independent_owner_confirmations: row.independent_owner_confirmations,
+    demonstration: row.presentation === 'demonstration',
     efficiency_ranking: null,
     last_reviewed_at: row.last_reviewed_at?.toISOString() ?? null,
     instructions_are_untrusted: true,
@@ -324,17 +402,18 @@ export function catalogDocument(
   components: readonly ComponentRow[],
   now: Date,
 ): Record<string, unknown> {
-  const body = {
+  const canonical = {
     schema_version: '0.2.0',
-    catalog_version: '2026.10.20-1',
     generated_at: now.toISOString(),
     source_kind: 'mixed',
+    historical_snapshots: false,
     signature: {
       status: 'unsupported',
       signed: false,
       detail: 'This catalog is not cryptographically signed. A content hash is not a signature and is not a trust anchor.',
     },
     efficiency_ranking: null,
+    bsl_environments: bslEnvironmentNotice(profiles),
     matching: {
       location: 'local',
       upload_workspace: false,
@@ -344,10 +423,25 @@ export function catalogDocument(
     profiles: profiles.map(profileView),
     tools: components.map(componentView),
   };
-  const encoded = JSON.stringify(body);
+  const digest = createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
   return {
-    ...body,
-    content_sha256: createHash('sha256').update(encoded, 'utf8').digest('hex'),
+    ...canonical,
+    catalog_version: digest,
+    content_sha256: digest,
+  };
+}
+
+function bslEnvironmentNotice(profiles: readonly ProfileRow[]): Record<string, unknown> {
+  const confirmed = profiles.some((row) => row.independent_owner_confirmations > 0);
+  const development = profiles.filter((row) => (
+    row.status === 'published' && row.profile_id !== 'bsl-mesh-public-read'
+  )).length;
+  return {
+    independently_confirmed: confirmed,
+    published_bsl_development_environments: development,
+    detail: development === 0
+      ? 'No independently confirmed BSL development environment is published. The published profile only describes how to read this BSL Mesh server.'
+      : 'Published BSL development profiles have no independent confirmations and are not an efficiency ranking.',
   };
 }
 

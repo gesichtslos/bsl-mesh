@@ -243,7 +243,7 @@ export function buildMcpServer(input: {
           clientKey: caller.clientKey,
         });
         if (args.catalog_version !== undefined && body['catalog_version'] !== args.catalog_version) {
-          throw new IdentityError(404, 'Not Found', 'That catalog version is not current.');
+          throw new IdentityError(404, 'Not Found', 'Historical catalog snapshots are not retained.');
         }
         return toolJson(body);
       } catch (error) {

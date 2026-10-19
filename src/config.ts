@@ -24,6 +24,7 @@ export type AppConfig = {
   rateLimitOwnerPerMinute: number;
   rateLimitPublicPerMinute: number;
   knowledgeSourceKind: 'organic' | 'synthetic' | 'import';
+  registryDemonstration: boolean;
 };
 
 export class ConfigError extends Error {
@@ -48,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitOwnerPerMinute: readLimit(env, 'RATE_LIMIT_OWNER_PER_MINUTE', 120),
     rateLimitPublicPerMinute: readLimit(env, 'RATE_LIMIT_PUBLIC_PER_MINUTE', 120),
     knowledgeSourceKind: readSourceKind(env, nodeEnv),
+    registryDemonstration: env['REGISTRY_DEMONSTRATION']?.trim() === 'enabled',
   };
 }
 

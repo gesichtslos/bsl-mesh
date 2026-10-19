@@ -3,12 +3,14 @@
   "title": "BSL Mesh starter catalog",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "catalog_version", "generated_at", "source_kind", "signature", "efficiency_ranking", "matching", "profiles", "tools", "content_sha256"],
+  "required": ["schema_version", "catalog_version", "generated_at", "source_kind", "historical_snapshots", "signature", "efficiency_ranking", "bsl_environments", "matching", "profiles", "tools", "content_sha256"],
   "properties": {
     "schema_version": { "const": "0.2.0" },
     "catalog_version": { "type": "string" },
     "generated_at": { "type": "string" },
     "source_kind": { "const": "mixed" },
+    "historical_snapshots": { "const": false },
+    "bsl_environments": { "type": "object" },
     "signature": {
       "type": "object",
       "additionalProperties": false,

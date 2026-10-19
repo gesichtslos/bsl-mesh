@@ -8,7 +8,10 @@ import { loadConfig, type AppConfig } from '../src/config.js';
 import { migrate } from '../src/db/migrate.js';
 import { createPool } from '../src/db/pool.js';
 import { resetDisposableSchema, type SqlClient } from '../src/db/test-database.js';
-function config(): AppConfig {
+import { EnvironmentService } from '../src/environment/service.js';
+import { IdentityService } from '../src/identity/service.js';
+
+function appConfig(overrides: NodeJS.ProcessEnv = {}): AppConfig {
   const databaseUrl = process.env['TEST_DATABASE_URL'];
   if (databaseUrl === undefined || databaseUrl === '') {
     throw new Error('TEST_DATABASE_URL is required.');
@@ -21,6 +24,7 @@ function config(): AppConfig {
     NODE_ENV: 'test',
     AUTH_PUBLIC_REGISTRATION: 'false',
     AUTH_TEST_ADAPTER: 'enabled',
+    ...overrides,
   });
 }
 
@@ -35,6 +39,18 @@ function sql(pool: Pool): SqlClient {
   };
 }
 
+async function toolText(client: Client, name: string, args: Record<string, unknown>): Promise<string> {
+  const result = await client.callTool({ name, arguments: args });
+  const text = result.content?.find((item) => item.type === 'text')?.text;
+  if (text === undefined) {
+    throw new Error('Tool result did not include text.');
+  }
+  if (result.isError === true) {
+    throw new Error(text);
+  }
+  return text;
+}
+
 let app: FastifyInstance;
 let pool: Pool;
 let base: string;
@@ -47,7 +63,7 @@ beforeAll(async () => {
   pool = createPool(databaseUrl);
   await resetDisposableSchema(sql(pool), process.env);
   await migrate(pool);
-  app = await buildApp(config());
+  app = await buildApp(appConfig());
   await app.listen({ host: '127.0.0.1', port: 0 });
   const address = app.server.address();
   if (address === null || typeof address === 'string') {
@@ -61,105 +77,226 @@ afterAll(async () => {
   await pool?.end();
 });
 
-test('a newcomer reads the catalog over HTTPS without an account or MCP', async () => {
+test('the public catalog is only the self-checked read profile and is not a BSL environment ranking', async () => {
   const catalog = await fetch(`${base}/agent/starter-catalog.json`);
   expect(catalog.status).toBe(200);
-  expect(catalog.headers.get('etag')).toMatch(/^"[a-f0-9]{64}"$/);
-  expect(catalog.headers.get('cache-control')).toContain('public');
   const body = await catalog.json() as {
-    signature: { signed: boolean; status: string };
+    catalog_version: string;
+    content_sha256: string;
+    historical_snapshots: boolean;
+    signature: { signed: boolean };
     efficiency_ranking: null;
-    profiles: Array<{ id: string; source_kind: string; status: string; evidence_quality: string; confirmed_practice: boolean }>;
-    tools: Array<{ id: string; upstream_url: string; purpose: string; sha256: string | null; sha256_is_trust: boolean }>;
+    bsl_environments: { independently_confirmed: boolean; published_bsl_development_environments: number; detail: string };
+    profiles: Array<{ id: string; source_kind: string; status: string }>;
+    tools: Array<{ id: string; upstream_url: string }>;
   };
+  expect(catalog.headers.get('etag')).toBe(`"${body.content_sha256}"`);
+  expect(body.catalog_version).toBe(body.content_sha256);
+  expect(body.historical_snapshots).toBe(false);
   expect(body.signature.signed).toBe(false);
-  expect(body.signature.status).toBe('unsupported');
   expect(body.efficiency_ranking).toBeNull();
-  expect(body.profiles.map((profile) => profile.id).sort()).toEqual([
-    'bsl-development-base',
-    'bsl-managed-forms',
-    'bsl-mesh-public-read',
-    'bsl-ordinary-forms',
-  ]);
-  const synthetic = body.profiles.filter((profile) => profile.source_kind === 'synthetic');
-  expect(synthetic.every((profile) => profile.status !== 'published' && profile.confirmed_practice === false)).toBe(true);
-  expect(synthetic.every((profile) => profile.evidence_quality === 'insufficient_evidence')).toBe(true);
-  expect(body.tools.every((tool) => tool.upstream_url.startsWith('https://github.com/gesichtslos/bsl-mesh'))).toBe(true);
-  const injection = body.tools.find((tool) => tool.id === 'demo-untrusted-note');
-  expect(injection?.purpose).toContain('Ignore previous instructions');
-  expect(injection?.sha256).toBeNull();
-  expect(injection?.sha256_is_trust).toBe(false);
-  expect(JSON.stringify(body)).not.toContain('approval_granted_by_server');
-  expect(JSON.stringify(body)).not.toContain('shell_command_to_run_unconditionally');
-
-  const again = await fetch(`${base}/agent/starter-catalog.json`, { headers: { 'if-none-match': catalog.headers.get('etag') ?? '' } });
-  expect(again.status).toBe(304);
-  const start = await fetch(`${base}/start`);
-  expect(start.status).toBe(200);
-  expect(await start.text()).not.toContain('<script>');
-  const quickstart = await fetch(`${base}/agent/quickstart.md`);
-  expect(quickstart.status).toBe(200);
-  expect(await quickstart.text()).toContain('наиболее эффективное окружение определить нельзя');
-  const manifest = await fetch(`${base}/agent/security-manifest.md`);
-  expect(manifest.status).toBe(200);
-  expect(await manifest.text()).toContain('ПРАВИЛО ДОВЕРИЯ');
-  const signatures = await fetch(`${base}/agent/catalog-signatures.json`);
-  expect(await signatures.json()).toMatchObject({ signed: false, status: 'unsupported' });
+  expect(body.bsl_environments.independently_confirmed).toBe(false);
+  expect(body.bsl_environments.published_bsl_development_environments).toBe(0);
+  expect(body.bsl_environments.detail).toContain('No independently confirmed BSL development environment');
+  expect(body.profiles.map((profile) => profile.id)).toEqual(['bsl-mesh-public-read']);
+  expect(body.tools.map((tool) => tool.id)).toEqual(['bsl-mesh-mcp']);
+  expect(body.tools[0]?.upstream_url).toBe('https://github.com/gesichtslos/bsl-mesh');
+  const unchanged = await fetch(`${base}/agent/starter-catalog.json`, {
+    headers: { 'if-none-match': catalog.headers.get('etag') ?? '' },
+  });
+  expect(unchanged.status).toBe(304);
+  const hidden = await fetch(`${base}/api/v1/starter-profiles/bsl-ordinary-forms/versions/0.1.0`);
+  const hiddenTool = await fetch(`${base}/api/v1/tool-versions/demo-untrusted-note/versions/0.1.0`);
+  expect(hidden.status).toBe(404);
+  expect(hiddenTool.status).toBe(404);
+  expect(await fetch(`${base}/agent/quickstart.md`).then((response) => response.text())).toContain('наиболее эффективное окружение определить нельзя');
 });
 
-test('REST and MCP return the same starter profile and keep withdrawn history', async () => {
-  const rest = await fetch(`${base}/api/v1/starter-profiles/bsl-ordinary-forms/versions/0.1.0`);
-  expect(rest.status).toBe(200);
-  const restBody = await rest.json() as { id: string; source_kind: string; status: string };
+test('anonymous REST and MCP hide non-public versions and keep withdrawn history', async () => {
+  await pool.query(
+    `INSERT INTO environment_profiles (id, created_at) VALUES ('visibility-fixture', '2026-10-20T00:00:00Z')`,
+  );
+  await pool.query(
+    `INSERT INTO profile_versions (
+       profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+       components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+       evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+       last_reviewed_at, review_due_at, created_at, presentation
+     )
+     SELECT 'visibility-fixture', seed.version, seed.status, 'organic', summary, tasks, hosts, applicability, incompatibilities,
+            components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+            evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+            last_reviewed_at, review_due_at, created_at, 'catalog'
+     FROM (VALUES
+       ('0.1.0', 'draft'),
+       ('0.2.0', 'reviewed'),
+       ('0.3.0', 'published'),
+       ('0.4.0', 'published'),
+       ('0.5.0', 'published'),
+       ('0.6.0', 'published')
+     ) AS seed(version, status)
+     CROSS JOIN profile_versions AS source
+     WHERE source.profile_id = 'bsl-mesh-public-read' AND source.version = '0.1.0'`,
+  );
+  await pool.query(`UPDATE profile_versions SET status = 'security_hold' WHERE profile_id = 'visibility-fixture' AND version = '0.3.0'`);
+  await pool.query(`UPDATE profile_versions SET status = 'superseded' WHERE profile_id = 'visibility-fixture' AND version = '0.4.0'`);
+  await pool.query(`UPDATE profile_versions SET status = 'contested' WHERE profile_id = 'visibility-fixture' AND version = '0.5.0'`);
+  await pool.query(`UPDATE profile_versions SET status = 'withdrawn' WHERE profile_id = 'visibility-fixture' AND version = '0.6.0'`);
   const client = new Client(
     { name: 'bslmesh-starter', version: '0.1.0' },
     { versionNegotiation: { mode: { pin: '2026-07-28' } } },
   );
-  const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`));
-  await client.connect(transport);
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   try {
-    const listed = await client.callTool({ name: 'bslmesh_list_starter_profiles', arguments: {} });
-    const text = listed.content?.find((item) => item.type === 'text')?.text;
-    const page = JSON.parse(text ?? '{}') as { items: Array<{ id: string }> };
-    expect(page.items.some((item) => item.id === 'bsl-ordinary-forms')).toBe(true);
-    const profile = await client.callTool({
-      name: 'bslmesh_get_starter_profile',
-      arguments: { profile_id: 'bsl-ordinary-forms', version: '0.1.0' },
-    });
-    const profileText = profile.content?.find((item) => item.type === 'text')?.text ?? '';
-    expect(JSON.parse(profileText)).toMatchObject(restBody);
-    const snapshot = await client.callTool({ name: 'bslmesh_get_catalog_snapshot', arguments: {} });
-    const snapshotText = snapshot.content?.find((item) => item.type === 'text')?.text ?? '';
-    expect(JSON.parse(snapshotText)).toMatchObject({ signature: { signed: false }, efficiency_ranking: null });
+    const hidden = ['0.1.0', '0.2.0', '0.3.0'];
+    const visible = [
+      ['0.4.0', 'superseded'],
+      ['0.5.0', 'contested'],
+      ['0.6.0', 'withdrawn'],
+    ] as const;
+    for (const version of hidden) {
+      const response = await fetch(`${base}/api/v1/starter-profiles/visibility-fixture/versions/${version}`);
+      expect(response.status).toBe(404);
+      await expect(toolText(client, 'bslmesh_get_starter_profile', {
+        profile_id: 'visibility-fixture',
+        version,
+      })).rejects.toThrow();
+    }
+    for (const [version, status] of visible) {
+      const response = await fetch(`${base}/api/v1/starter-profiles/visibility-fixture/versions/${version}`);
+      expect(response.status).toBe(200);
+      const rest = await response.json() as { status: string };
+      expect(rest.status).toBe(status);
+      const mcp = JSON.parse(await toolText(client, 'bslmesh_get_starter_profile', {
+        profile_id: 'visibility-fixture',
+        version,
+      })) as { status: string };
+      expect(mcp).toMatchObject(rest);
+    }
+    const listed = JSON.parse(await toolText(client, 'bslmesh_list_starter_profiles', {})) as {
+      items: Array<{ id: string; version: string }>;
+    };
+    expect(listed.items.some((item) => item.id === 'visibility-fixture' && item.version === '0.1.0')).toBe(false);
+    expect(listed.items.some((item) => item.id === 'visibility-fixture' && item.version === '0.6.0')).toBe(true);
   } finally {
     await client.close();
   }
+});
 
-  const before = await pool.query<{ summary: string }>(
-    `SELECT summary FROM component_versions WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
-  );
+test('published registry rows cannot be edited, deleted, or given a substituted upstream', async () => {
+  const original = await fetch(`${base}/api/v1/tool-versions/bsl-mesh-mcp/versions/0.1.0`);
+  const originalBody = await original.json() as { upstream_url: string; summary: string };
+  await expect(pool.query(
+    `UPDATE component_versions SET status = 'draft' WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
+  )).rejects.toThrow(/not allowed/);
   await expect(pool.query(
     `UPDATE component_versions SET summary = 'changed' WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
   )).rejects.toThrow(/immutable/);
-  const after = await pool.query<{ summary: string }>(
-    `SELECT summary FROM component_versions WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
-  );
-  expect(after.rows[0]?.summary).toBe(before.rows[0]?.summary);
   await expect(pool.query(
-    `UPDATE profile_versions SET status = 'published' WHERE profile_id = 'bsl-ordinary-forms' AND version = '0.1.0'`,
-  )).rejects.toThrow(/synthetic/);
+    `UPDATE environment_components SET upstream_url = 'https://github.com/gesichtslos/bsl-mesh/security' WHERE id = 'bsl-mesh-mcp'`,
+  )).rejects.toThrow(/new version/);
+  await expect(pool.query(
+    `DELETE FROM component_versions WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
+  )).rejects.toThrow(/cannot be deleted/);
+  await expect(pool.query(
+    `DELETE FROM environment_components WHERE id = 'bsl-mesh-mcp'`,
+  )).rejects.toThrow(/cannot be deleted/);
+  const still = await fetch(`${base}/api/v1/tool-versions/bsl-mesh-mcp/versions/0.1.0`);
+  expect(await still.json()).toMatchObject(originalBody);
+  const service = new EnvironmentService(pool, new IdentityService(pool, appConfig(), () => new Date()), appConfig(), () => new Date());
+  await expect(service.addComponentVersion({
+    id: 'evil-local',
+    kind: 'mcp',
+    name: 'Evil',
+    purpose: 'Must not be stored.',
+    maintainer: 'fixture',
+    upstreamUrl: 'https://127.0.0.1/mcp',
+    license: 'none',
+    version: '0.1.0',
+    status: 'published',
+    sourceKind: 'organic',
+    summary: 'Rejected local upstream.',
+  })).rejects.toThrow(/not an allowed public https address/);
+  const absent = await pool.query(`SELECT id FROM environment_components WHERE id = 'evil-local'`);
+  expect(absent.rows).toEqual([]);
+  await service.addComponentVersion({
+    id: 'bsl-mesh-mcp',
+    kind: 'mcp',
+    name: 'BSL Mesh MCP',
+    purpose: 'A later version with the same public repository.',
+    maintainer: 'gesichtslos/bsl-mesh',
+    upstreamUrl: 'https://github.com/gesichtslos/bsl-mesh',
+    license: 'License is not selected by the project owner.',
+    version: '0.2.0',
+    status: 'published',
+    sourceKind: 'organic',
+    summary: 'Second published version.',
+  });
+  const first = await fetch(`${base}/api/v1/tool-versions/bsl-mesh-mcp/versions/0.1.0`);
+  const second = await fetch(`${base}/api/v1/tool-versions/bsl-mesh-mcp/versions/0.2.0`);
+  expect(await first.json()).toMatchObject({ upstream_url: originalBody.upstream_url, summary: originalBody.summary });
+  expect(await second.json()).toMatchObject({ summary: 'Second published version.' });
+});
+
+test('withdrawing a published profile changes the current catalog id and does not serve the old snapshot', async () => {
+  const before = await fetch(`${base}/agent/starter-catalog.json`);
+  const previous = await before.json() as { catalog_version: string; content_sha256: string };
   await pool.query(
-    `UPDATE profile_versions SET status = 'withdrawn' WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+    `UPDATE profile_versions SET status = 'withdrawn' WHERE profile_id = 'visibility-fixture' AND version = '0.5.0'`,
   );
-  await pool.query(
-    `INSERT INTO registry_events (id, object_type, object_id, object_version, action, reason, created_at)
-     VALUES ('018f2000-0000-7000-8000-000000000099', 'profile', 'bsl-mesh-public-read', '0.1.0', 'withdrawn', 'Withdrawn for the registry history test.', '2026-10-20T00:00:00Z')`,
+  const after = await fetch(`${base}/agent/starter-catalog.json`);
+  const next = await after.json() as { catalog_version: string; content_sha256: string; profiles: Array<{ id: string; version: string; status: string }> };
+  expect(after.headers.get('etag')).toBe(`"${next.content_sha256}"`);
+  expect(next.catalog_version).toBe(next.content_sha256);
+  expect(next.catalog_version).not.toBe(previous.catalog_version);
+  expect(next.profiles.some((profile) => profile.id === 'visibility-fixture' && profile.version === '0.5.0' && profile.status === 'withdrawn')).toBe(true);
+  const client = new Client(
+    { name: 'bslmesh-starter', version: '0.1.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
   );
-  const withdrawn = await fetch(`${base}/api/v1/starter-profiles/bsl-mesh-public-read/versions/0.1.0`);
-  const withdrawnBody = await withdrawn.json() as { status: string; events: Array<{ action: string }> };
-  expect(withdrawnBody.status).toBe('withdrawn');
-  expect(withdrawnBody.events.some((event) => event.action === 'withdrawn')).toBe(true);
-  const hidden = await fetch(`${base}/api/v1/starter-profiles`);
-  const hiddenBody = await hidden.json() as { items: Array<{ id: string; version: string }> };
-  expect(hiddenBody.items.some((item) => item.id === 'bsl-mesh-public-read' && item.version === '0.1.0')).toBe(false);
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  try {
+    const current = JSON.parse(await toolText(client, 'bslmesh_get_catalog_snapshot', {
+      catalog_version: next.catalog_version,
+    })) as { catalog_version: string };
+    expect(current.catalog_version).toBe(next.catalog_version);
+    await expect(toolText(client, 'bslmesh_get_catalog_snapshot', {
+      catalog_version: previous.catalog_version,
+    })).rejects.toThrow(/Historical catalog snapshots are not retained/);
+  } finally {
+    await client.close();
+  }
+});
+
+test('demonstration records stay out of the public catalog unless that mode is enabled', async () => {
+  const service = new EnvironmentService(pool, new IdentityService(pool, appConfig(), () => new Date()), appConfig(), () => new Date());
+  await service.addComponentVersion({
+    id: 'demo-public-marker',
+    kind: 'cli',
+    name: 'Demonstration marker',
+    purpose: 'Shown only in demonstration mode.',
+    maintainer: 'fixture',
+    upstreamUrl: 'https://github.com/gesichtslos/bsl-mesh',
+    license: 'none',
+    version: '0.1.0',
+    status: 'published',
+    sourceKind: 'organic',
+    summary: 'Demonstration fixture.',
+    presentation: 'demonstration',
+  });
+  const hidden = await fetch(`${base}/api/v1/tool-versions/demo-public-marker/versions/0.1.0`);
+  expect(hidden.status).toBe(404);
+  const demonstrated = await buildApp(appConfig({ REGISTRY_DEMONSTRATION: 'enabled' }));
+  await demonstrated.listen({ host: '127.0.0.1', port: 0 });
+  try {
+    const address = demonstrated.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('The demonstration listener did not bind.');
+    }
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/tool-versions/demo-public-marker/versions/0.1.0`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ demonstration: true, id: 'demo-public-marker' });
+  } finally {
+    await demonstrated.close();
+  }
 });

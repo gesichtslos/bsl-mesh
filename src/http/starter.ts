@@ -92,7 +92,8 @@ export const starterRoutes: FastifyPluginAsync<{ service: EnvironmentService }> 
       accessToken: token(request.headers.authorization),
       clientKey: anonymousRateKey(request.ip),
     });
-    const cached = cache(body);
+    const digest = typeof body['content_sha256'] === 'string' ? body['content_sha256'] : '';
+    const cached = { etag: `"${digest}"`, payload: '' };
     if (request.headers['if-none-match'] === cached.etag) {
       return reply.code(304).header('etag', cached.etag).header('cache-control', 'public, max-age=60').send();
     }
