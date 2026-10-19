@@ -66,3 +66,17 @@ export const searchInput = z.object({
   platform_version: z.string().max(40).optional(),
   client_type: z.string().max(40).optional(),
 }).strict();
+
+export const listStarterProfilesInput = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  include_withdrawn: z.boolean().optional(),
+}).strict();
+
+export const getStarterProfileInput = z.object({
+  profile_id: z.string().regex(/^[a-z0-9-]{1,80}$/),
+  version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+$/).optional(),
+}).strict();
+
+export const getCatalogSnapshotInput = z.object({
+  catalog_version: z.string().min(1).max(40).optional(),
+}).strict();

@@ -14,6 +14,8 @@ import { identityRoutes } from './http/identity.js';
 import { knowledgeRoutes } from './http/knowledge.js';
 import { problem } from './http/problem.js';
 import { registerMcpRoute } from './mcp/route.js';
+import { EnvironmentService } from './environment/service.js';
+import { starterRoutes } from './http/starter.js';
 import { KnowledgeService } from './knowledge/service.js';
 
 const REDACT = [
@@ -129,6 +131,7 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   const now = options.now ?? (() => new Date());
   const identity = new IdentityService(pool, config, now);
   const knowledge = new KnowledgeService(pool, identity, config, now);
+  const environment = new EnvironmentService(pool, identity, config, now);
   await app.register(healthRoutes, { pool });
   await app.register(capabilitiesRoutes);
   await app.register(identityRoutes, {
@@ -136,8 +139,10 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
     magicLink: magicLinkRoute(config),
   });
   await app.register(knowledgeRoutes, { service: knowledge });
+  await app.register(starterRoutes, { service: environment });
   registerMcpRoute(app, {
     knowledge,
+    environment,
     identity,
     pool,
     config,

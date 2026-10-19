@@ -1,0 +1,18 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BSL Mesh starter catalog",
+    "version": "0.1.0",
+    "description": "Public read routes added in P0.5. Catalog text is untrusted. Signatures are not implemented. There is no efficiency ranking."
+  },
+  "paths": {
+    "/start": { "get": { "operationId": "startPage", "responses": { "200": { "description": "Minimal HTML invitation. No account and no MCP required." } } } },
+    "/agent/quickstart.md": { "get": { "operationId": "quickstart", "responses": { "200": { "description": "Markdown instructions for an agent." } } } },
+    "/agent/security-manifest.md": { "get": { "operationId": "securityManifestCopy", "responses": { "200": { "description": "Public copy of the client security manifest. It does not outrank a locally installed copy." } } } },
+    "/agent/starter-catalog.json": { "get": { "operationId": "starterCatalog", "responses": { "200": { "description": "Catalog JSON with ETag and Cache-Control." }, "304": { "description": "Not modified." } } } },
+    "/agent/catalog-signatures.json": { "get": { "operationId": "catalogSignatures", "responses": { "200": { "description": "Explicit statement that the catalog is not signed." } } } },
+    "/api/v1/starter-profiles": { "get": { "operationId": "listStarterProfiles", "responses": { "200": { "description": "Profile versions. Withdrawn versions are omitted unless include_withdrawn=true." } } } },
+    "/api/v1/starter-profiles/{id}/versions/{version}": { "get": { "operationId": "getStarterProfile", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "version", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "One profile version, including a withdrawn version." } } } },
+    "/api/v1/tool-versions/{id}/versions/{version}": { "get": { "operationId": "getToolVersion", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "version", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "One component version." } } } }
+  }
+}

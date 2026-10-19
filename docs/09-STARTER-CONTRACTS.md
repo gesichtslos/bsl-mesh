@@ -1,6 +1,6 @@
 # 09. Контракты newcomer bootstrap / starter catalog / install plan
 
-**Статус:** проект контракта v0.2. Все примеры синтетические, API ещё не существует. Реализация: OpenAPI 3.1 и JSON Schema 2020-12, snapshots + contract tests. Указанный `PROJECT_DOMAIN` — параметр окружения.
+**Статус:** часть read-маршрутов реализована в P0.5 и описана в `13-ENVIRONMENTS.md`. `POST /api/v1/starter-resolve`, практики и криптографическая подпись каталога не реализованы. Примеры ниже остаются иллюстрацией и не являются живыми данными.
 
 ## 1. Новые read endpoints (public, без cookies/авторизации)
 
