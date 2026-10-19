@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BSL Mesh starter catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "catalog_version", "generated_at", "source_kind", "historical_snapshots", "signature", "efficiency_ranking", "bsl_environments", "matching", "profiles", "tools", "content_sha256"],
+  "properties": {
+    "schema_version": { "const": "0.2.0" },
+    "catalog_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "source_kind": { "const": "mixed" },
+    "historical_snapshots": { "const": false },
+    "bsl_environments": { "type": "object" },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "signed", "detail"],
+      "properties": {
+        "status": { "const": "unsupported" },
+        "signed": { "const": false },
+        "detail": { "type": "string" }
+      }
+    },
+    "efficiency_ranking": { "type": "null" },
+    "matching": { "type": "object" },
+    "profiles": { "type": "array", "items": { "type": "object" } },
+    "tools": { "type": "array", "items": { "type": "object" } },
+    "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

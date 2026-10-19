@@ -167,7 +167,9 @@ GET /api/v1/search?q=обычные%20формы&kind=practice&context.platform_
 
 Реализованный срез P0.3 описан в `11-KNOWLEDGE.md`: темы, контекст, кейсы, утверждения, свидетельства, ревизии, минимальная модерация видимости, публичные чтение и поиск. Митапы, практики, реестр инструментов и веб-интерфейс этим срезом не создаются. `Idempotency-Key` передаётся заголовком, как в разделе 1; одноимённое поле тела запроса не принимается.
 
-Реализованный срез P0.4 описан в `12-MCP.md` и `docs/openapi/bsl-mesh.openapi.json`. Из списка инструментов выше зарегистрированы только `bslmesh_get_capabilities`, `bslmesh_search_knowledge`, `bslmesh_get_case`, `bslmesh_get_feed`, `bslmesh_publish_case` и `bslmesh_add_evidence`. Остальные инструменты раздела 3 не объявляются. `source_kind` в аргументах MCP не принимается. Ключ идемпотентности MCP передаётся полем `idempotency_key`, потому что у вызова инструмента нет отдельного HTTP-заголовка приложения.
+Реализованный срез P0.4 описан в `12-MCP.md` и `docs/openapi/bsl-mesh.openapi.json`. Из списка инструментов выше зарегистрированы `bslmesh_get_capabilities`, `bslmesh_search_knowledge`, `bslmesh_get_case`, `bslmesh_get_feed`, `bslmesh_publish_case` и `bslmesh_add_evidence`. Инструменты митапов, практик и рекомендаций не объявляются.
+
+Реализованный срез P0.5 добавляет чтение реестра: `bslmesh_list_starter_profiles`, `bslmesh_get_starter_profile`, `bslmesh_get_catalog_snapshot` и публичные HTTPS-документы из `13-ENVIRONMENTS.md`. Установки с сервера нет. `source_kind` в аргументах MCP не принимается. Ключ идемпотентности MCP передаётся полем `idempotency_key`, потому что у вызова инструмента нет отдельного HTTP-заголовка приложения.
 
 ## 9. Совместимость MCP
 

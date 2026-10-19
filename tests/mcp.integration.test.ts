@@ -201,7 +201,10 @@ test('an official client negotiates MCP 2026-07-28 and lists only public read to
     expect(names).toEqual([
       'bslmesh_get_capabilities',
       'bslmesh_get_case',
+      'bslmesh_get_catalog_snapshot',
       'bslmesh_get_feed',
+      'bslmesh_get_starter_profile',
+      'bslmesh_list_starter_profiles',
       'bslmesh_search_knowledge',
     ]);
     for (const tool of listed.tools) {
@@ -832,7 +835,10 @@ test('a 2025-era client reads published knowledge without write tools', async ()
     expect(names).toEqual([
       'bslmesh_get_capabilities',
       'bslmesh_get_case',
+      'bslmesh_get_catalog_snapshot',
       'bslmesh_get_feed',
+      'bslmesh_get_starter_profile',
+      'bslmesh_list_starter_profiles',
       'bslmesh_search_knowledge',
     ]);
     const capabilities = toolJson(await legacy.callTool({

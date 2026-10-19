@@ -6,6 +6,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { AppConfig } from '../config.js';
 import { IdentityError } from '../identity/errors.js';
 import type { IdentityService } from '../identity/service.js';
+import type { EnvironmentService } from '../environment/service.js';
 import type { KnowledgeService } from '../knowledge/service.js';
 import { anonymousRateKey } from '../knowledge/rate-key.js';
 import { buildMcpServer } from './tools.js';
@@ -14,6 +15,7 @@ export function registerMcpRoute(
   app: FastifyInstance,
   input: {
     knowledge: KnowledgeService;
+    environment: EnvironmentService;
     identity: IdentityService;
     pool: import('pg').Pool;
     config: AppConfig;
@@ -24,6 +26,7 @@ export function registerMcpRoute(
   const handler = createMcpHandler((ctx) => buildMcpServer({
     authInfo: ctx.authInfo,
     knowledge: input.knowledge,
+    environment: input.environment,
     pool: input.pool,
     config: input.config,
     now: input.now,
