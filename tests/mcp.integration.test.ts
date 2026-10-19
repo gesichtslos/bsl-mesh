@@ -698,6 +698,123 @@ test('a retried publication does not release a revision changed by another agent
   }
 });
 
+test('publishing several claims does not depend on stored claim order', async () => {
+  const owner = await sessionFor(app, 'mcp-claims@example.test');
+  const writer = await credentialFor(app, owner, ['cases:write']);
+  const client = await connect(base, writer.token);
+  try {
+    const published = toolJson(await client.callTool({
+      name: 'bslmesh_publish_case',
+      arguments: {
+        ...publishArguments('Несколько утверждений MCP', 'Сводка с повторяющимся утверждением.'),
+        claims: [
+          { text: 'Первое утверждение о форме.' },
+          { text: 'Второе утверждение о форме.' },
+          { text: 'Первое утверждение о форме.' },
+        ],
+      },
+    })) as { id: string; visibility: string; claims: Array<{ claim_text: string }> };
+    expect(published.visibility).toBe('public');
+    expect(published.claims.map((claim) => claim.claim_text).sort()).toEqual([
+      'Второе утверждение о форме.',
+      'Первое утверждение о форме.',
+      'Первое утверждение о форме.',
+    ]);
+    const anonymous = await fetch(`${base}/api/v1/cases/${published.id}`);
+    expect(anonymous.status).toBe(200);
+    const body = await anonymous.json() as { claims: Array<{ claim_text: string }> };
+    expect(body.claims.map((claim) => claim.claim_text).sort()).toEqual([
+      'Второе утверждение о форме.',
+      'Первое утверждение о форме.',
+      'Первое утверждение о форме.',
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
+test('changing one claim after a partial publication still blocks the retry', async () => {
+  const kept = 'Неизменённое утверждение о форме.';
+  const original = 'Исходное второе утверждение.';
+  const substituted = 'mcp-substituted-claim-marker';
+  const title = 'Правка одного утверждения не публикуется повтором';
+  const email = 'mcp-claim-edit@example.test';
+  let armed = true;
+  const partial = await buildApp(identityConfig(), {
+    afterMcpCaseCreated: async () => {
+      if (!armed) {
+        return;
+      }
+      armed = false;
+      await pool.query('UPDATE owners SET publication_enabled = false WHERE email = $1', [email]);
+    },
+  });
+  await partial.listen({ host: '127.0.0.1', port: 0 });
+  const address = partial.server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('The claim-edit listener did not bind.');
+  }
+  const partialBase = `http://127.0.0.1:${address.port}`;
+  const owner = await sessionFor(partial, email);
+  const writer = await credentialFor(partial, owner, ['cases:write']);
+  const editor = await credentialFor(partial, owner, ['cases:write']);
+  const client = await connect(partialBase, writer.token);
+  try {
+    const arguments_ = {
+      ...publishArguments(title, 'Сводка двух утверждений.'),
+      claims: [{ text: kept }, { text: original }],
+    };
+    const failed = await client.callTool({ name: 'bslmesh_publish_case', arguments: arguments_ });
+    expect(failed.isError).toBe(true);
+    const created = await pool.query<{ id: string }>(
+      'SELECT id FROM cases WHERE title = $1',
+      [title],
+    );
+    const caseId = created.rows[0]?.id;
+    if (caseId === undefined) {
+      throw new Error('The partial case was not stored.');
+    }
+    const claim = await pool.query<{ id: string }>(
+      'SELECT id FROM claims WHERE case_id = $1 AND claim_text = $2',
+      [caseId, original],
+    );
+    const claimId = claim.rows[0]?.id;
+    if (claimId === undefined) {
+      throw new Error('The original claim was not stored.');
+    }
+    await pool.query('UPDATE owners SET publication_enabled = true WHERE email = $1', [email]);
+    const revised = await partial.inject({
+      method: 'PATCH',
+      url: `/api/v1/claims/${claimId}`,
+      headers: { authorization: `Bearer ${editor.token}`, 'idempotency-key': key() },
+      payload: { claim_text: `Заменено ${substituted}.` },
+    });
+    expect(revised.statusCode).toBe(200);
+    const retried = await client.callTool({ name: 'bslmesh_publish_case', arguments: arguments_ });
+    expect(retried.isError).toBe(true);
+    const retriedText = JSON.stringify(retried);
+    expect(retriedText).toContain('no longer matches the submitted publication');
+    expect(retriedText).not.toContain(substituted);
+    const stored = await pool.query<{ visibility: string; released_revision: number | null }>(
+      'SELECT visibility, released_revision FROM cases WHERE id = $1',
+      [caseId],
+    );
+    expect(stored.rows).toEqual([{ visibility: 'private', released_revision: null }]);
+    const revisions = await pool.query<{ released: boolean; claim_text: string }>(
+      'SELECT released, claim_text FROM claim_revisions WHERE claim_id = $1',
+      [claimId],
+    );
+    expect(revisions.rows.some((row) => row.claim_text.includes(substituted))).toBe(true);
+    expect(revisions.rows.every((row) => row.released === false)).toBe(true);
+    const anonymous = await fetch(`${partialBase}/api/v1/cases/${caseId}`);
+    expect(anonymous.status).toBe(404);
+    expect(JSON.stringify(await anonymous.json())).not.toContain(substituted);
+  } finally {
+    await client.close();
+    await partial.close();
+  }
+});
+
 test('a 2025-era client reads published knowledge without write tools', async () => {
   const owner = await sessionFor(app, 'mcp-legacy@example.test');
   const writer = await credentialFor(app, owner, ['cases:write']);

@@ -8,6 +8,7 @@ import { consumeRateLimit } from '../identity/rate-limit.js';
 import type { AgentPrincipal, IdentityService } from '../identity/service.js';
 import { hashRequest, sameDigest } from '../identity/tokens.js';
 import { compareContext, parseContext, type KnowledgeContext } from './context.js';
+import { submittedClaimsMatch } from './submitted-claims.js';
 import {
   assessEvidence,
   evaluateClaim,
@@ -685,43 +686,37 @@ export class KnowledgeService {
     const context = await this.contextById(client, row.context_id);
     const claims = await client.query<{ id: string; claim_text: string; context_id: string; current_revision: number }>(
       `SELECT id, claim_text, context_id, current_revision
-       FROM claims WHERE case_id = $1
-       ORDER BY created_at ASC, id ASC`,
+       FROM claims WHERE case_id = $1`,
       [row.id],
     );
     const evidence = await client.query<{ claim_id: string; claim_revision: number }>(
       `SELECT claim_id, claim_revision FROM evidence WHERE claim_id = ANY($1::uuid[])`,
       [claims.rows.map((claim) => claim.id)],
     );
+    const storedClaims = [];
+    for (const claim of claims.rows) {
+      const attached = evidence.rows.filter((item) => (
+        item.claim_id === claim.id && item.claim_revision === claim.current_revision
+      )).length;
+      storedClaims.push({
+        text: claim.claim_text,
+        context: await this.contextById(client, claim.context_id),
+        evidenceCount: attached,
+      });
+    }
+    const expectedClaims = draft.claims.map((claim) => ({
+      text: claim.text,
+      context: claim.context ?? draft.context,
+      evidenceCount: claim.evidence.length,
+    }));
     const matches = row.case_type === draft.caseType
       && row.title === draft.title
       && row.body_md === draft.body
       && topic.rows[0]?.slug === draft.topic
       && sameContext(context, draft.context)
-      && claims.rows.length === draft.claims.length
-      && draft.claims.every((claim, index) => {
-        const stored = claims.rows[index];
-        if (stored === undefined || stored.claim_text !== claim.text) {
-          return false;
-        }
-        const attached = evidence.rows.filter((item) => (
-          item.claim_id === stored.id && item.claim_revision === stored.current_revision
-        )).length;
-        return attached === claim.evidence.length;
-      });
+      && submittedClaimsMatch(expectedClaims, storedClaims);
     if (!matches) {
       throw new IdentityError(409, 'Conflict', 'The case no longer matches the submitted publication.');
-    }
-    for (const [index, claim] of draft.claims.entries()) {
-      const stored = claims.rows[index];
-      if (stored === undefined) {
-        throw new IdentityError(409, 'Conflict', 'The case no longer matches the submitted publication.');
-      }
-      const storedContext = await this.contextById(client, stored.context_id);
-      const expectedContext = claim.context ?? draft.context;
-      if (!sameContext(storedContext, expectedContext)) {
-        throw new IdentityError(409, 'Conflict', 'The case no longer matches the submitted publication.');
-      }
     }
   }
 
