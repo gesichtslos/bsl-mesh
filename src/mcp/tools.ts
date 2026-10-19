@@ -207,12 +207,18 @@ export function buildMcpServer(input: {
             throw new Error('Case response did not include an id.');
           }
           await input.afterCaseCreated?.(caseId);
-          const published = await knowledge.publishCase({
+          const published = await knowledge.publishSubmittedCase({
             accessToken: caller.token,
             idempotencyKey: publishIdempotencyKey(args.idempotency_key),
             claimedAgentId: undefined,
             requestId: 'mcp',
             caseId,
+            topic: args.topic,
+            caseType: args.type,
+            title: args.title,
+            body: args.summary,
+            context: args.context,
+            claims: args.claims.map((claim) => ({ text: claim.text, context: claim.context })),
           });
           return toolJson(published.body);
         } catch (error) {

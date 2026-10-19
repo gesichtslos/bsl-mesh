@@ -624,6 +624,80 @@ test('a failed publication stays private and the same key recovers without a sec
   }
 });
 
+test('a retried publication does not release a revision changed by another agent', async () => {
+  const original = 'Исходный текст публикации MCP.';
+  const substituted = 'mcp-substituted-revision-marker';
+  const title = 'Публикация не подхватывает чужую правку';
+  const email = 'mcp-race@example.test';
+  let armed = true;
+  const partial = await buildApp(identityConfig(), {
+    afterMcpCaseCreated: async () => {
+      if (!armed) {
+        return;
+      }
+      armed = false;
+      await pool.query('UPDATE owners SET publication_enabled = false WHERE email = $1', [email]);
+    },
+  });
+  await partial.listen({ host: '127.0.0.1', port: 0 });
+  const address = partial.server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('The raced-publication listener did not bind.');
+  }
+  const partialBase = `http://127.0.0.1:${address.port}`;
+  const owner = await sessionFor(partial, email);
+  const writer = await credentialFor(partial, owner, ['cases:write']);
+  const editor = await credentialFor(partial, owner, ['cases:write']);
+  const client = await connect(partialBase, writer.token);
+  try {
+    const arguments_ = publishArguments(title, original);
+    const failed = await client.callTool({ name: 'bslmesh_publish_case', arguments: arguments_ });
+    expect(failed.isError).toBe(true);
+    const created = await pool.query<{ id: string }>(
+      'SELECT id FROM cases WHERE title = $1',
+      [title],
+    );
+    const caseId = created.rows[0]?.id;
+    if (caseId === undefined) {
+      throw new Error('The partial case was not stored.');
+    }
+    await pool.query('UPDATE owners SET publication_enabled = true WHERE email = $1', [email]);
+    const revised = await partial.inject({
+      method: 'PATCH',
+      url: `/api/v1/cases/${caseId}`,
+      headers: { authorization: `Bearer ${editor.token}`, 'idempotency-key': key() },
+      payload: { body_md: `Служебная замена ${substituted}.` },
+    });
+    expect(revised.statusCode).toBe(200);
+    const retried = await client.callTool({ name: 'bslmesh_publish_case', arguments: arguments_ });
+    expect(retried.isError).toBe(true);
+    const retriedText = JSON.stringify(retried);
+    expect(retriedText).toContain('no longer matches the submitted publication');
+    expect(retriedText).not.toContain(substituted);
+    expect(retriedText).not.toContain(writer.token);
+    expect(retriedText).not.toContain(editor.token);
+    const stored = await pool.query<{ visibility: string; released_revision: number | null }>(
+      'SELECT visibility, released_revision FROM cases WHERE id = $1',
+      [caseId],
+    );
+    expect(stored.rows).toEqual([{ visibility: 'private', released_revision: null }]);
+    const revisions = await pool.query<{ released: boolean; body_md: string }>(
+      'SELECT released, body_md FROM case_revisions WHERE case_id = $1',
+      [caseId],
+    );
+    expect(revisions.rows.some((row) => row.body_md.includes(substituted))).toBe(true);
+    expect(revisions.rows.every((row) => row.released === false)).toBe(true);
+    const search = await fetch(`${partialBase}/api/v1/search?q=${encodeURIComponent(substituted)}`);
+    const anonymous = await fetch(`${partialBase}/api/v1/cases/${caseId}`);
+    expect(anonymous.status).toBe(404);
+    expect(JSON.stringify(await search.json())).not.toContain(substituted);
+    expect(JSON.stringify(await anonymous.json())).not.toContain(substituted);
+  } finally {
+    await client.close();
+    await partial.close();
+  }
+});
+
 test('a 2025-era client reads published knowledge without write tools', async () => {
   const owner = await sessionFor(app, 'mcp-legacy@example.test');
   const writer = await credentialFor(app, owner, ['cases:write']);
