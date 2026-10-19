@@ -374,3 +374,154 @@ test('a synthetic record cannot be inserted directly into a public status', asyn
   expect(body.profiles.some((profile) => profile.id === 'synthetic-bypass')).toBe(false);
   expect(body.tools.some((tool) => tool.id === 'synthetic-bypass')).toBe(false);
 });
+
+test('synthetic security hold cannot be withdrawn into public history', async () => {
+  await pool.query(
+    `INSERT INTO environment_profiles (id, created_at) VALUES ('synthetic-hold', '2026-10-20T00:00:00Z')`,
+  );
+  await pool.query(
+    `INSERT INTO environment_components (id, kind, name, purpose, maintainer, upstream_url, license, created_at)
+     VALUES ('synthetic-hold', 'rule', 'Hold', 'Synthetic hold bypass.', 'fixture', 'https://github.com/gesichtslos/bsl-mesh', 'none', '2026-10-20T00:00:00Z')`,
+  );
+  await expect(pool.query(
+    `INSERT INTO profile_versions (
+       profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+       components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+       evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+       created_at, presentation
+     )
+     SELECT 'synthetic-hold', '0.3.0', 'security_hold', 'synthetic', summary, tasks, hosts, applicability, incompatibilities,
+            components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+            evidence_quality, recommendation_level, conflicts_of_interest, 0, created_at, 'catalog'
+     FROM profile_versions WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  )).rejects.toThrow(/must start from publication/);
+  await expect(pool.query(
+    `INSERT INTO component_versions (
+       component_id, version, status, source_kind, summary, hosts, requirements, limitations, risks, provenance,
+       evidence_quality, independent_owner_confirmations, created_at, kind, name, purpose, maintainer, upstream_url, license, presentation
+     )
+     SELECT 'synthetic-hold', '0.3.0', 'security_hold', 'synthetic', summary, hosts, requirements, limitations, risks, provenance,
+            evidence_quality, 0, created_at, kind, name, purpose, maintainer, upstream_url, license, 'catalog'
+     FROM component_versions WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
+  )).rejects.toThrow(/must start from publication/);
+  await expect(pool.query(
+    `INSERT INTO profile_versions (
+       profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+       components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+       evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+       created_at, presentation
+     )
+     SELECT 'synthetic-hold', '0.5.0', 'security_hold', 'organic', summary, tasks, hosts, applicability, incompatibilities,
+            components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+            evidence_quality, recommendation_level, conflicts_of_interest, 0, created_at, 'catalog'
+     FROM profile_versions WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  )).rejects.toThrow(/must start from publication/);
+  const profileWithdrawn = await pool.query(
+    `UPDATE profile_versions SET status = 'withdrawn' WHERE profile_id = 'synthetic-hold' AND version = '0.3.0'`,
+  );
+  const componentWithdrawn = await pool.query(
+    `UPDATE component_versions SET status = 'withdrawn' WHERE component_id = 'synthetic-hold' AND version = '0.3.0'`,
+  );
+  expect(profileWithdrawn.rowCount).toBe(0);
+  expect(componentWithdrawn.rowCount).toBe(0);
+  await pool.query(
+    `INSERT INTO profile_versions (
+       profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+       components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+       evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+       created_at, presentation
+     )
+     SELECT 'synthetic-hold', '0.4.0', 'draft', 'synthetic', summary, tasks, hosts, applicability, incompatibilities,
+            components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+            evidence_quality, recommendation_level, conflicts_of_interest, 0, created_at, 'demonstration'
+     FROM profile_versions WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  );
+  for (const status of ['published', 'contested', 'withdrawn', 'superseded']) {
+    await expect(pool.query(
+      `UPDATE profile_versions SET status = $1 WHERE profile_id = 'synthetic-hold' AND version = '0.4.0'`,
+      [status],
+    )).rejects.toThrow(/cannot be public/);
+  }
+  const stored = await pool.query<{ status: string }>(
+    `SELECT status FROM profile_versions WHERE profile_id = 'synthetic-hold'`,
+  );
+  expect(stored.rows).toEqual([{ status: 'draft' }]);
+  const catalog = await fetch(`${base}/agent/starter-catalog.json`);
+  const body = await catalog.json() as { profiles: Array<{ id: string }>; tools: Array<{ id: string }> };
+  expect(body.profiles.some((profile) => profile.id === 'synthetic-hold')).toBe(false);
+  expect(body.tools.some((tool) => tool.id === 'synthetic-hold')).toBe(false);
+  expect((await fetch(`${base}/api/v1/starter-profiles/synthetic-hold/versions/0.3.0`)).status).toBe(404);
+  expect((await fetch(`${base}/api/v1/tool-versions/synthetic-hold/versions/0.3.0`)).status).toBe(404);
+  const client = new Client(
+    { name: 'bslmesh-starter', version: '0.1.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  try {
+    await expect(toolText(client, 'bslmesh_get_starter_profile', {
+      profile_id: 'synthetic-hold',
+      version: '0.3.0',
+    })).rejects.toThrow();
+    const listed = JSON.parse(await toolText(client, 'bslmesh_list_starter_profiles', {
+      include_withdrawn: true,
+    })) as { items: Array<{ id: string }> };
+    expect(listed.items.some((item) => item.id === 'synthetic-hold')).toBe(false);
+  } finally {
+    await client.close();
+  }
+});
+
+test('a published profile can move from security hold to withdrawn and stay readable', async () => {
+  await pool.query(
+    `INSERT INTO environment_profiles (id, created_at) VALUES ('published-hold', '2026-10-20T00:00:00Z')`,
+  );
+  await pool.query(
+    `INSERT INTO profile_versions (
+       profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+       components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+       evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+       last_reviewed_at, review_due_at, created_at, presentation
+     )
+     SELECT 'published-hold', '0.1.0', 'published', 'organic', summary, tasks, hosts, applicability, incompatibilities,
+            components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+            evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+            last_reviewed_at, review_due_at, created_at, 'catalog'
+     FROM profile_versions WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  );
+  await pool.query(`UPDATE profile_versions SET status = 'security_hold' WHERE profile_id = 'published-hold' AND version = '0.1.0'`);
+  expect((await fetch(`${base}/api/v1/starter-profiles/published-hold/versions/0.1.0`)).status).toBe(404);
+  await pool.query(`UPDATE profile_versions SET status = 'withdrawn' WHERE profile_id = 'published-hold' AND version = '0.1.0'`);
+  const response = await fetch(`${base}/api/v1/starter-profiles/published-hold/versions/0.1.0`);
+  expect(response.status).toBe(200);
+  const rest = await response.json() as { status: string };
+  expect(rest.status).toBe('withdrawn');
+  const client = new Client(
+    { name: 'bslmesh-starter', version: '0.1.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  try {
+    const mcp = JSON.parse(await toolText(client, 'bslmesh_get_starter_profile', {
+      profile_id: 'published-hold',
+      version: '0.1.0',
+    })) as { status: string };
+    expect(mcp).toMatchObject(rest);
+    const current = JSON.parse(await toolText(client, 'bslmesh_list_starter_profiles', {})) as {
+      items: Array<{ id: string; version: string }>;
+    };
+    const history = JSON.parse(await toolText(client, 'bslmesh_list_starter_profiles', {
+      include_withdrawn: true,
+    })) as { items: Array<{ id: string; version: string }> };
+    const present = (items: Array<{ id: string; version: string }>) => (
+      items.some((item) => item.id === 'published-hold' && item.version === '0.1.0')
+    );
+    expect(present(current.items)).toBe(false);
+    expect(present(history.items)).toBe(true);
+    const restCurrent = await fetch(`${base}/api/v1/starter-profiles`);
+    const restHistory = await fetch(`${base}/api/v1/starter-profiles?include_withdrawn=true`);
+    expect(present((await restCurrent.json() as { items: Array<{ id: string; version: string }> }).items)).toBe(false);
+    expect(present((await restHistory.json() as { items: Array<{ id: string; version: string }> }).items)).toBe(true);
+  } finally {
+    await client.close();
+  }
+});
