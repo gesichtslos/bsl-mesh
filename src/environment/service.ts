@@ -80,14 +80,16 @@ export class EnvironmentService {
   }): Promise<{ items: Record<string, unknown>[]; next_cursor: null }> {
     await this.reader(input.accessToken, input.clientKey);
     const limit = boundLimit(input.limit);
+    const withdrawn = input.includeWithdrawn
+      ? ''
+      : ` AND status <> 'withdrawn'`;
     const result = await this.pool.query<ProfileRow>(
       `${PROFILE_SELECT}
-       WHERE ${this.publicSql('')}
+       WHERE ${this.publicSql('')}${withdrawn}
        ORDER BY profile_id ASC, string_to_array(version, '.')::int[] DESC
        LIMIT $1`,
       [limit],
     );
-    void input.includeWithdrawn;
     return { items: result.rows.map(profileView), next_cursor: null };
   }
 

@@ -176,8 +176,21 @@ test('anonymous REST and MCP hide non-public versions and keep withdrawn history
     const listed = JSON.parse(await toolText(client, 'bslmesh_list_starter_profiles', {})) as {
       items: Array<{ id: string; version: string }>;
     };
+    const withHistory = JSON.parse(await toolText(client, 'bslmesh_list_starter_profiles', {
+      include_withdrawn: true,
+    })) as { items: Array<{ id: string; version: string }> };
+    const restCurrent = await fetch(`${base}/api/v1/starter-profiles`);
+    const restHistory = await fetch(`${base}/api/v1/starter-profiles?include_withdrawn=true`);
+    const restCurrentBody = await restCurrent.json() as { items: Array<{ id: string; version: string }> };
+    const restHistoryBody = await restHistory.json() as { items: Array<{ id: string; version: string }> };
+    const withdrawn = (items: Array<{ id: string; version: string }>) => (
+      items.some((item) => item.id === 'visibility-fixture' && item.version === '0.6.0')
+    );
     expect(listed.items.some((item) => item.id === 'visibility-fixture' && item.version === '0.1.0')).toBe(false);
-    expect(listed.items.some((item) => item.id === 'visibility-fixture' && item.version === '0.6.0')).toBe(true);
+    expect(withdrawn(listed.items)).toBe(false);
+    expect(withdrawn(restCurrentBody.items)).toBe(false);
+    expect(withdrawn(withHistory.items)).toBe(true);
+    expect(withdrawn(restHistoryBody.items)).toBe(true);
   } finally {
     await client.close();
   }
@@ -299,4 +312,65 @@ test('demonstration records stay out of the public catalog unless that mode is e
   } finally {
     await demonstrated.close();
   }
+});
+
+test('published timestamps cannot be rewritten or change the catalog digest', async () => {
+  const before = await fetch(`${base}/agent/starter-catalog.json`);
+  const digest = (await before.json() as { catalog_version: string }).catalog_version;
+  await expect(pool.query(
+    `UPDATE profile_versions SET created_at = '2026-11-01T00:00:00Z' WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  )).rejects.toThrow(/immutable/);
+  await expect(pool.query(
+    `UPDATE profile_versions SET last_reviewed_at = '2026-11-01T00:00:00Z' WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  )).rejects.toThrow(/immutable/);
+  await expect(pool.query(
+    `UPDATE profile_versions SET review_due_at = '2026-11-01T00:00:00Z' WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  )).rejects.toThrow(/immutable/);
+  await expect(pool.query(
+    `UPDATE component_versions SET created_at = '2026-11-01T00:00:00Z' WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
+  )).rejects.toThrow(/immutable/);
+  await expect(pool.query(
+    `UPDATE component_versions SET last_reviewed_at = '2026-11-01T00:00:00Z' WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
+  )).rejects.toThrow(/immutable/);
+  const after = await fetch(`${base}/agent/starter-catalog.json`);
+  expect((await after.json() as { catalog_version: string }).catalog_version).toBe(digest);
+});
+
+test('a synthetic record cannot be inserted directly into a public status', async () => {
+  await pool.query(
+    `INSERT INTO environment_profiles (id, created_at) VALUES ('synthetic-bypass', '2026-10-20T00:00:00Z')`,
+  );
+  await pool.query(
+    `INSERT INTO environment_components (id, kind, name, purpose, maintainer, upstream_url, license, created_at)
+     VALUES ('synthetic-bypass', 'rule', 'Bypass', 'Synthetic bypass attempt.', 'fixture', 'https://github.com/gesichtslos/bsl-mesh', 'none', '2026-10-20T00:00:00Z')`,
+  );
+  for (const [index, status] of ['published', 'contested', 'withdrawn', 'superseded'].entries()) {
+    await expect(pool.query(
+      `INSERT INTO profile_versions (
+         profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+         components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+         evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+         created_at, presentation
+       )
+       SELECT 'synthetic-bypass', $1, $2, 'synthetic', summary, tasks, hosts, applicability, incompatibilities,
+              components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+              evidence_quality, recommendation_level, conflicts_of_interest, 0, created_at, 'catalog'
+       FROM profile_versions WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+      [`0.1.${index}`, status],
+    )).rejects.toThrow(/cannot be public|must start from publication/);
+    await expect(pool.query(
+      `INSERT INTO component_versions (
+         component_id, version, status, source_kind, summary, hosts, requirements, limitations, risks, provenance,
+         evidence_quality, independent_owner_confirmations, created_at, kind, name, purpose, maintainer, upstream_url, license, presentation
+       )
+       SELECT 'synthetic-bypass', $1, $2, 'synthetic', summary, hosts, requirements, limitations, risks, provenance,
+              evidence_quality, 0, created_at, kind, name, purpose, maintainer, upstream_url, license, 'catalog'
+       FROM component_versions WHERE component_id = 'bsl-mesh-mcp' AND version = '0.1.0'`,
+      [`0.2.${index}`, status],
+    )).rejects.toThrow(/cannot be public|must start from publication/);
+  }
+  const catalog = await fetch(`${base}/agent/starter-catalog.json`);
+  const body = await catalog.json() as { profiles: Array<{ id: string }>; tools: Array<{ id: string }> };
+  expect(body.profiles.some((profile) => profile.id === 'synthetic-bypass')).toBe(false);
+  expect(body.tools.some((tool) => tool.id === 'synthetic-bypass')).toBe(false);
 });
