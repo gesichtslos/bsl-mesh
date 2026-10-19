@@ -8,6 +8,7 @@ import { consumeRateLimit } from '../identity/rate-limit.js';
 import type { AgentPrincipal, IdentityService } from '../identity/service.js';
 import { hashRequest, sameDigest } from '../identity/tokens.js';
 import { compareContext, parseContext, type KnowledgeContext } from './context.js';
+import { submittedClaimsMatch } from './submitted-claims.js';
 import {
   assessEvidence,
   evaluateClaim,
@@ -137,18 +138,7 @@ export class KnowledgeService {
       claimedAgentId: input.claimedAgentId,
       requestId: input.requestId,
     });
-    const draft = {
-      topic: input.topic,
-      caseType: choice(input.caseType, CASE_TYPES),
-      title: untrustedText(input.title, 1, 200),
-      body: untrustedText(input.body, 1, 8000),
-      visibility: privateVisibility(input.visibility),
-      context: parseContext(input.context),
-      claims: input.claims.map((claim) => this.claimDraft(claim.text, claim.context, claim.evidence)),
-    };
-    if (draft.claims.length === 0 || draft.claims.length > 10) {
-      throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
-    }
+    const draft = this.submission(input);
     if (draft.claims.some((claim) => claim.evidence.length > 0) && !principal.scopes.includes('evidence:write')) {
       throw new IdentityError(403, 'Forbidden', IDENTITY_DETAIL.scopeDenied);
     }
@@ -388,11 +378,52 @@ export class KnowledgeService {
         return this.replayFor(client, replay, principal);
       }
       const row = await this.lockVisibleCase(client, input.caseId, principal, 'author');
-      const current = this.now();
-      await client.query(
-        `UPDATE case_revisions SET released = true WHERE case_id = $1 AND revision = $2`,
-        [row.id, row.current_revision],
-      );
+      const response = await this.releaseLockedCase(client, row, principal, input.requestId);
+      await this.finishIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, response, 200);
+      return { statusCode: 200, body: response };
+    });
+  }
+
+  async publishSubmittedCase(input: {
+    accessToken: string;
+    idempotencyKey: string;
+    claimedAgentId: string | undefined;
+    requestId: string;
+    caseId: string;
+    topic: string;
+    caseType: string;
+    title: string;
+    body: string;
+    context: unknown;
+    claims: readonly { text: string; context?: unknown; evidence?: readonly Record<string, unknown>[] }[];
+  }): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+    const principal = await this.writePrincipal(input, 'cases:write');
+    const draft = this.submission(input);
+    const requestHash = hashRequest({ caseId: input.caseId, action: 'publish-submitted', draft });
+    return this.withTransaction(async (client) => {
+      const replay = await this.beginIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, requestHash);
+      if (replay !== null) {
+        return this.replayFor(client, replay, principal);
+      }
+      const row = await this.lockVisibleCase(client, input.caseId, principal, 'author');
+      await this.assertSubmittedCase(client, row, draft);
+      const response = await this.releaseLockedCase(client, row, principal, input.requestId);
+      await this.finishIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, response, 200);
+      return { statusCode: 200, body: response };
+    });
+  }
+
+  private async releaseLockedCase(
+    client: PoolClient,
+    row: CaseRow,
+    principal: AgentPrincipal,
+    requestId: string,
+  ): Promise<Record<string, unknown>> {
+    const current = this.now();
+    await client.query(
+      `UPDATE case_revisions SET released = true WHERE case_id = $1 AND revision = $2`,
+      [row.id, row.current_revision],
+    );
       await client.query(
         `UPDATE cases
          SET visibility = 'public', released_revision = current_revision, updated_at = $2
@@ -437,14 +468,11 @@ export class KnowledgeService {
           current,
         ],
       );
-      await this.audit(client, principal, 'knowledge.published', input.requestId, {
-        case_id: row.id,
-        visibility: 'public',
-      });
-      const response = await this.caseView(client, await this.mustCase(client, row.id), 'public');
-      await this.finishIdempotent(client, principal.ownerId, 'case.publish', input.idempotencyKey, response, 200);
-      return { statusCode: 200, body: response };
+    await this.audit(client, principal, 'knowledge.published', requestId, {
+      case_id: row.id,
+      visibility: 'public',
     });
+    return this.caseView(client, await this.mustCase(client, row.id), 'public');
   }
 
   async setVisibility(input: {
@@ -608,6 +636,88 @@ export class KnowledgeService {
       claimedAgentId: input.claimedAgentId,
       requestId: input.requestId,
     });
+  }
+
+  private submission(input: {
+    topic: string;
+    caseType: string;
+    title: string;
+    body: string;
+    visibility?: string | undefined;
+    context: unknown;
+    claims: readonly { text: string; context?: unknown; evidence?: readonly Record<string, unknown>[] }[];
+  }): {
+    topic: string;
+    caseType: CaseType;
+    title: string;
+    body: string;
+    visibility: Visibility;
+    context: KnowledgeContext;
+    claims: ClaimDraft[];
+  } {
+    const draft = {
+      topic: input.topic,
+      caseType: choice(input.caseType, CASE_TYPES),
+      title: untrustedText(input.title, 1, 200),
+      body: untrustedText(input.body, 1, 8000),
+      visibility: privateVisibility(input.visibility),
+      context: parseContext(input.context),
+      claims: input.claims.map((claim) => this.claimDraft(claim.text, claim.context, claim.evidence)),
+    };
+    if (draft.claims.length === 0 || draft.claims.length > 10) {
+      throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
+    }
+    return draft;
+  }
+
+  private async assertSubmittedCase(
+    client: PoolClient,
+    row: CaseRow,
+    draft: {
+      topic: string;
+      caseType: CaseType;
+      title: string;
+      body: string;
+      context: KnowledgeContext;
+      claims: readonly ClaimDraft[];
+    },
+  ): Promise<void> {
+    const topic = await client.query<{ slug: string }>('SELECT slug FROM topics WHERE id = $1', [row.topic_id]);
+    const context = await this.contextById(client, row.context_id);
+    const claims = await client.query<{ id: string; claim_text: string; context_id: string; current_revision: number }>(
+      `SELECT id, claim_text, context_id, current_revision
+       FROM claims WHERE case_id = $1`,
+      [row.id],
+    );
+    const evidence = await client.query<{ claim_id: string; claim_revision: number }>(
+      `SELECT claim_id, claim_revision FROM evidence WHERE claim_id = ANY($1::uuid[])`,
+      [claims.rows.map((claim) => claim.id)],
+    );
+    const storedClaims = [];
+    for (const claim of claims.rows) {
+      const attached = evidence.rows.filter((item) => (
+        item.claim_id === claim.id && item.claim_revision === claim.current_revision
+      )).length;
+      storedClaims.push({
+        text: claim.claim_text,
+        context: await this.contextById(client, claim.context_id),
+        evidenceCount: attached,
+      });
+    }
+    const expectedClaims = draft.claims.map((claim) => ({
+      text: claim.text,
+      context: claim.context ?? draft.context,
+      evidenceCount: claim.evidence.length,
+    }));
+    const matches = row.case_type === draft.caseType
+      && row.title === draft.title
+      && row.body_md === draft.body
+      && topic.rows[0]?.slug === draft.topic
+      && sameContext(context, draft.context)
+      && submittedClaimsMatch(expectedClaims, storedClaims);
+    if (!matches) {
+      throw new IdentityError(409, 'Conflict', 'The case no longer matches the submitted publication.');
+    }
   }
 
   private sourceKind(): SourceKind {
@@ -1277,6 +1387,19 @@ function canMutate(principal: AgentPrincipal, authorOwnerId: string, visibility:
     return true;
   }
   return visibility === 'public';
+}
+
+function sameContext(left: KnowledgeContext, right: KnowledgeContext): boolean {
+  return left.platform_version === right.platform_version
+    && left.compatibility_mode === right.compatibility_mode
+    && left.application_mode === right.application_mode
+    && left.form_type === right.form_type
+    && left.client_type === right.client_type
+    && left.os === right.os
+    && left.dbms === right.dbms
+    && left.configuration_family === right.configuration_family
+    && left.tool_name === right.tool_name
+    && left.tool_version === right.tool_version;
 }
 
 function privateVisibility(value: string | undefined): Visibility {

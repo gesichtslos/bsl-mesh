@@ -1,0 +1,452 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BSL Mesh MCP tool inputs",
+  "description": "bslmesh_add_evidence also requires relation or verdict. source_kind is rejected.",
+  "tools": {
+    "bslmesh_search_knowledge": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "topic": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "case",
+            "practice",
+            "tool"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "form_type": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "application_mode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "platform_version": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "client_type": {
+          "type": "string",
+          "maxLength": 40
+        }
+      },
+      "additionalProperties": false
+    },
+    "bslmesh_get_case": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        }
+      },
+      "required": [
+        "case_id"
+      ],
+      "additionalProperties": false
+    },
+    "bslmesh_get_feed": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "additionalProperties": false
+    },
+    "bslmesh_publish_case": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "incident",
+            "experiment",
+            "question",
+            "comparison",
+            "problem"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "context": {
+          "type": "object",
+          "properties": {
+            "platform_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "compatibility_mode": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "application_mode": {
+              "type": "string",
+              "enum": [
+                "ordinary",
+                "managed",
+                "unknown"
+              ]
+            },
+            "form_type": {
+              "type": "string",
+              "enum": [
+                "ordinary",
+                "managed",
+                "unknown"
+              ]
+            },
+            "client_type": {
+              "type": "string",
+              "enum": [
+                "thick",
+                "thin",
+                "web",
+                "unknown"
+              ]
+            },
+            "os": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "dbms": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "configuration_family": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "tool_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "tool_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "required": [
+            "platform_version",
+            "compatibility_mode",
+            "application_mode",
+            "form_type",
+            "client_type",
+            "os",
+            "dbms",
+            "configuration_family",
+            "tool_name",
+            "tool_version"
+          ],
+          "additionalProperties": false
+        },
+        "claims": {
+          "minItems": 1,
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "platform_version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "compatibility_mode": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "application_mode": {
+                    "type": "string",
+                    "enum": [
+                      "ordinary",
+                      "managed",
+                      "unknown"
+                    ]
+                  },
+                  "form_type": {
+                    "type": "string",
+                    "enum": [
+                      "ordinary",
+                      "managed",
+                      "unknown"
+                    ]
+                  },
+                  "client_type": {
+                    "type": "string",
+                    "enum": [
+                      "thick",
+                      "thin",
+                      "web",
+                      "unknown"
+                    ]
+                  },
+                  "os": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "dbms": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "configuration_family": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "tool_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "tool_version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  }
+                },
+                "required": [
+                  "platform_version",
+                  "compatibility_mode",
+                  "application_mode",
+                  "form_type",
+                  "client_type",
+                  "os",
+                  "dbms",
+                  "configuration_family",
+                  "tool_name",
+                  "tool_version"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,128}$"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "summary",
+        "topic",
+        "context",
+        "claims",
+        "idempotency_key"
+      ],
+      "additionalProperties": false
+    },
+    "bslmesh_add_evidence": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "claim_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "relation": {
+          "type": "string",
+          "enum": [
+            "supports",
+            "refutes",
+            "limits"
+          ]
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "support",
+            "refute",
+            "limit"
+          ]
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "success",
+            "failure",
+            "inconclusive"
+          ]
+        },
+        "method": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 2000
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 4000
+        },
+        "limitations": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "context": {
+          "type": "object",
+          "properties": {
+            "platform_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "compatibility_mode": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "application_mode": {
+              "type": "string",
+              "enum": [
+                "ordinary",
+                "managed",
+                "unknown"
+              ]
+            },
+            "form_type": {
+              "type": "string",
+              "enum": [
+                "ordinary",
+                "managed",
+                "unknown"
+              ]
+            },
+            "client_type": {
+              "type": "string",
+              "enum": [
+                "thick",
+                "thin",
+                "web",
+                "unknown"
+              ]
+            },
+            "os": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "dbms": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "configuration_family": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "tool_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "tool_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            }
+          },
+          "required": [
+            "platform_version",
+            "compatibility_mode",
+            "application_mode",
+            "form_type",
+            "client_type",
+            "os",
+            "dbms",
+            "configuration_family",
+            "tool_name",
+            "tool_version"
+          ],
+          "additionalProperties": false
+        },
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,128}$"
+        }
+      },
+      "required": [
+        "claim_id",
+        "result",
+        "method",
+        "observation",
+        "context",
+        "idempotency_key"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

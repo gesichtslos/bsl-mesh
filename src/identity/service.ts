@@ -623,9 +623,11 @@ export class IdentityService {
     };
   }
 
-  async authenticateAgent(agentToken: string): Promise<AgentPrincipal> {
+  async authenticateAgent(agentToken: string, options?: { rateLimit?: boolean }): Promise<AgentPrincipal> {
     const principal = await this.agentFromToken(agentToken);
-    await this.limit(this.agentLimits(principal));
+    if (options?.rateLimit !== false) {
+      await this.limit(this.agentLimits(principal));
+    }
     return principal;
   }
 

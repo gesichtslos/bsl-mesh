@@ -22,11 +22,17 @@
     "migrate": "node dist/migrate.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/fastify": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "fastify": "5.12.7",
-    "pg": "8.23.1"
+    "hono": "4.11.4",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@typescript/native": "npm:typescript@7.0.2",
