@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "node dist/telemetry/main.js hook" }],
+    "sessionEnd": [{ "command": "node dist/telemetry/main.js hook" }],
+    "preToolUse": [{ "command": "node dist/telemetry/main.js hook" }],
+    "postToolUse": [{ "command": "node dist/telemetry/main.js hook" }],
+    "postToolUseFailure": [{ "command": "node dist/telemetry/main.js hook" }],
+    "stop": [{ "command": "node dist/telemetry/main.js hook" }],
+    "beforeSubmitPrompt": [{ "command": "node dist/telemetry/main.js hook" }]
+  }
+}

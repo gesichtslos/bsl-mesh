@@ -171,6 +171,8 @@ GET /api/v1/search?q=обычные%20формы&kind=practice&context.platform_
 
 Реализованный срез P0.5 добавляет чтение реестра: `bslmesh_list_starter_profiles`, `bslmesh_get_starter_profile`, `bslmesh_get_catalog_snapshot` и публичные HTTPS-документы из `13-ENVIRONMENTS.md`. Установки с сервера нет. `source_kind` в аргументах MCP не принимается. Ключ идемпотентности MCP передаётся полем `idempotency_key`, потому что у вызова инструмента нет отдельного HTTP-заголовка приложения.
 
+Реализованный срез P0.6 добавляет приватный `POST /api/v1/telemetry/reports` со scope `telemetry:write`. Отчёт не становится публичным и не создаёт рейтинг. Контракт: `17-LOCAL-TELEMETRY.md`.
+
 ## 9. Совместимость MCP
 
 Целевой стандарт — **2026-07-28**: stateless-ориентированный wire-протокол. Обязательное требование: тестировать MCP server **против конкретных используемых SDK и хостов**. Клиент на прежней версии может потребовать версионный adapter или иной контракт, а не принимать новый lifecycle прозрачно. Версию MCP возвращать в `/api/v1/capabilities` и документировать supported client matrix.

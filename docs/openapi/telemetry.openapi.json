@@ -1,0 +1,45 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BSL Mesh telemetry",
+    "version": "1",
+    "description": "Private intake of owner-approved anonymous task reports. Reports are not public and are not environment rankings."
+  },
+  "paths": {
+    "/api/v1/telemetry/reports": {
+      "post": {
+        "operationId": "submitTelemetryReport",
+        "security": [{ "agentCredential": ["telemetry:write"] }],
+        "parameters": [
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "../schemas/telemetry-report.schema.json" } } }
+        },
+        "responses": {
+          "201": { "description": "Stored as unverified. A repeat of the same document returns the same record." },
+          "403": { "description": "The credential does not have telemetry:write." },
+          "409": { "description": "The report id was already used with a different document." }
+        }
+      },
+      "get": {
+        "operationId": "listTelemetryReports",
+        "parameters": [
+          { "name": "source_kind", "in": "query", "schema": { "enum": ["organic", "synthetic"] } }
+        ],
+        "responses": { "200": { "description": "Reports of the authenticated owner. Organic and synthetic rows are not merged." } }
+      }
+    },
+    "/api/v1/telemetry/reports/{reportId}": {
+      "get": {
+        "operationId": "getTelemetryReport",
+        "parameters": [{ "name": "reportId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "One report belonging to the caller owner." },
+          "404": { "description": "Missing or owned by someone else." }
+        }
+      }
+    }
+  }
+}

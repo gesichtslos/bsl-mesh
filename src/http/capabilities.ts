@@ -17,7 +17,7 @@ export function capabilityDocument() {
       auth: 'bearer-credential' as const,
       oauth: 'unsupported' as const,
     },
-    features: ['health', 'identity', 'knowledge', 'mcp', 'starter'] as const,
+    features: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'] as const,
   };
 }
 
@@ -42,7 +42,7 @@ const capabilitiesSchema = {
     },
     features: {
       type: 'array',
-      items: { type: 'string', enum: ['health', 'identity', 'knowledge', 'mcp', 'starter'] },
+      items: { type: 'string', enum: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'] },
     },
   },
 } as const;

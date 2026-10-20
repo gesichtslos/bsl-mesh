@@ -68,7 +68,7 @@ describe('http foundation', () => {
         auth: 'bearer-credential',
         oauth: 'unsupported',
       },
-      features: ['health', 'identity', 'knowledge', 'mcp', 'starter'],
+      features: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'],
     });
   });
 
