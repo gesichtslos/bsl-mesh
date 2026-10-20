@@ -1,0 +1,167 @@
+{
+  "schema_version": "1",
+  "report_id": "f267406f-bf04-461f-8af5-06a03850828a",
+  "source_kind": "synthetic",
+  "environment": {
+    "snapshot_id": "fe943774-8c2b-4be2-bc1f-1b398e1341b6",
+    "previous_snapshot_ids": [
+      "f0b59f34-003d-4b68-a32c-c5fc692298b2"
+    ],
+    "host": "cursor-ide",
+    "cursor_version": "3.24.18",
+    "cli_version": "2026.10.16-e3cb207",
+    "model_id": "grok-4.7",
+    "os_family": "linux",
+    "tools": [
+      {
+        "name": "node",
+        "version": "24.22.0"
+      }
+    ],
+    "rules": [],
+    "skills": [],
+    "mcp_components": [],
+    "task_family": "synthetic-read",
+    "context": {
+      "form": "unknown",
+      "configuration_family": null
+    }
+  },
+  "task": {
+    "family": "synthetic-read",
+    "outcome": "unknown",
+    "attempt_count": 1,
+    "session_count": 1,
+    "verification": null
+  },
+  "measurements": [
+    {
+      "name": "tool_call_count",
+      "unit": "count",
+      "value": 3,
+      "state": "known",
+      "provenance": "instrumented",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "tool_failure_count",
+      "unit": "count",
+      "value": 1,
+      "state": "known",
+      "provenance": "instrumented",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "tool_duration_sum_ms",
+      "unit": "millisecond",
+      "value": 187422,
+      "state": "known",
+      "provenance": "instrumented",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "tool_busy_ms",
+      "unit": "millisecond",
+      "value": 94655,
+      "state": "known",
+      "provenance": "derived",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "session_duration_ms",
+      "unit": "millisecond",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "task_calendar_ms",
+      "unit": "millisecond",
+      "value": 179445,
+      "state": "known",
+      "provenance": "derived",
+      "source": "local-clock"
+    },
+    {
+      "name": "active_agent_ms",
+      "unit": "millisecond",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "unknown"
+    },
+    {
+      "name": "prompt_count",
+      "unit": "count",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "hook_overhead_ms",
+      "unit": "millisecond",
+      "value": 0,
+      "state": "known",
+      "provenance": "instrumented",
+      "source": "cursor-ide"
+    },
+    {
+      "name": "input_tokens",
+      "unit": "token",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    },
+    {
+      "name": "output_tokens",
+      "unit": "token",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    },
+    {
+      "name": "cache_read_tokens",
+      "unit": "token",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    },
+    {
+      "name": "cache_write_tokens",
+      "unit": "token",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    },
+    {
+      "name": "total_tokens",
+      "unit": "token",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    },
+    {
+      "name": "reasoning_tokens",
+      "unit": "token",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    },
+    {
+      "name": "cost_usd",
+      "unit": "usd",
+      "value": null,
+      "state": "unknown",
+      "provenance": "unknown",
+      "source": "cursor-sdk"
+    }
+  ]
+}

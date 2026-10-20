@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gesichtslos/bsl-mesh/docs/schemas/telemetry-report.schema.json",
+  "title": "BSL Mesh telemetry report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_id", "source_kind", "environment", "task", "measurements"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "report_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "source_kind": { "enum": ["organic", "synthetic"] },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id", "previous_snapshot_ids", "host", "cursor_version", "cli_version", "model_id", "os_family", "tools", "rules", "skills", "mcp_components", "task_family", "context"],
+      "properties": {
+        "snapshot_id": { "type": ["string", "null"] },
+        "previous_snapshot_ids": { "type": "array", "items": { "type": "string" } },
+        "host": { "enum": ["cursor-ide", "cursor-cli", "cursor-sdk", "mixed", "unknown"] },
+        "cursor_version": { "type": ["string", "null"] },
+        "cli_version": { "type": ["string", "null"] },
+        "model_id": { "type": ["string", "null"] },
+        "os_family": { "enum": ["linux", "darwin", "windows", "unknown"] },
+        "tools": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "version"] } },
+        "rules": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "sha256"] } },
+        "skills": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "sha256"] } },
+        "mcp_components": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "version"] } },
+        "task_family": { "type": "string" },
+        "context": { "type": "object", "additionalProperties": false, "required": ["form", "configuration_family"] }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "outcome", "attempt_count", "session_count", "verification"],
+      "properties": {
+        "family": { "type": "string" },
+        "outcome": { "enum": ["success_verified", "success_unverified", "partial", "failed", "abandoned", "unknown"] },
+        "attempt_count": { "type": "integer", "minimum": 1 },
+        "session_count": { "type": "integer", "minimum": 0 },
+        "verification": { "type": ["object", "null"] }
+      }
+    },
+    "measurements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "unit", "value", "state", "provenance", "source"],
+        "properties": {
+          "name": { "type": "string" },
+          "unit": { "enum": ["count", "millisecond", "token", "usd"] },
+          "value": { "type": ["number", "null"] },
+          "state": { "enum": ["known", "unknown"] },
+          "provenance": { "enum": ["instrumented", "provider_reported", "agent_reported", "owner_reported", "derived", "unknown"] },
+          "source": { "enum": ["cursor-ide", "cursor-cli", "cursor-sdk", "local-clock", "unknown"] }
+        }
+      }
+    }
+  }
+}

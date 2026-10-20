@@ -15,6 +15,8 @@ export type AuditDetail = {
   claim_id?: string;
   evidence_id?: string;
   visibility?: string;
+  report_id?: string;
+  source_kind?: 'organic' | 'synthetic';
 };
 
 export function auditDetail(input: Record<string, unknown>): AuditDetail {
@@ -52,6 +54,12 @@ export function auditDetail(input: Record<string, unknown>): AuditDetail {
   }
   if (typeof input['evidence_id'] === 'string') {
     detail.evidence_id = input['evidence_id'];
+  }
+  if (typeof input['report_id'] === 'string') {
+    detail.report_id = input['report_id'];
+  }
+  if (input['source_kind'] === 'organic' || input['source_kind'] === 'synthetic') {
+    detail.source_kind = input['source_kind'];
   }
   if (input['visibility'] === 'public' || input['visibility'] === 'members' || input['visibility'] === 'private') {
     detail.visibility = input['visibility'];

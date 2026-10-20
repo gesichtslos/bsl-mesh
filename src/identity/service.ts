@@ -631,6 +631,16 @@ export class IdentityService {
     return principal;
   }
 
+  async authenticateScopedAgent(agentToken: string, scope: WriteScope, requestId: string): Promise<AgentPrincipal> {
+    const principal = await this.agentFromToken(agentToken);
+    await this.limit(this.agentLimits(principal));
+    if (!principal.scopes.includes(scope)) {
+      await this.recordDenial(principal, scope, 'scope', undefined, requestId);
+      throw new IdentityError(403, 'Forbidden', IDENTITY_DETAIL.scopeDenied);
+    }
+    return principal;
+  }
+
   async requireAgentScope(input: {
     agentToken: string;
     scope: string;

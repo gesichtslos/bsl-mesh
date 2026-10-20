@@ -16,7 +16,9 @@ import { problem } from './http/problem.js';
 import { registerMcpRoute } from './mcp/route.js';
 import { EnvironmentService } from './environment/service.js';
 import { starterRoutes } from './http/starter.js';
+import { telemetryRoutes } from './http/telemetry.js';
 import { KnowledgeService } from './knowledge/service.js';
+import { TelemetryService } from './telemetry/service.js';
 
 const REDACT = [
   'req.headers.authorization',
@@ -132,6 +134,7 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   const identity = new IdentityService(pool, config, now);
   const knowledge = new KnowledgeService(pool, identity, config, now);
   const environment = new EnvironmentService(pool, identity, config, now);
+  const telemetry = new TelemetryService(pool, identity, now);
   await app.register(healthRoutes, { pool });
   await app.register(capabilitiesRoutes);
   await app.register(identityRoutes, {
@@ -140,6 +143,7 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   });
   await app.register(knowledgeRoutes, { service: knowledge });
   await app.register(starterRoutes, { service: environment });
+  await app.register(telemetryRoutes, { service: telemetry });
   registerMcpRoute(app, {
     knowledge,
     environment,

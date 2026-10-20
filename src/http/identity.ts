@@ -27,6 +27,7 @@ const scopeSchema = {
     'cases:write',
     'evidence:write',
     'meetups:write',
+    'telemetry:write',
   ],
 } as const;
 

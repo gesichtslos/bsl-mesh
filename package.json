@@ -19,7 +19,8 @@
     "ensure:db-roles": "bash scripts/load-env.sh node dist/ensure-db-roles.js",
     "prepare:test-db": "bash scripts/load-env.sh node dist/prepare-test-db.js",
     "start": "node dist/server.js",
-    "migrate": "node dist/migrate.js"
+    "migrate": "node dist/migrate.js",
+    "telemetry": "node dist/telemetry/main.js"
   },
   "dependencies": {
     "@modelcontextprotocol/fastify": "2.0.0",
