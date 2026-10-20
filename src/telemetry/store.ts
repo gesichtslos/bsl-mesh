@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { projectHook } from './allowlist.js';
 import { unionDuration } from './intervals.js';
 import { measurementsFromSdkUsage, sdkCost } from './sdk-usage.js';
 import { captureSnapshot, type EnvironmentSnapshot } from './snapshot.js';
+import { acceptedVerification, parseTelemetryReport } from './schema.js';
 import {
   OUTCOMES,
-  PROVENANCE,
   type FormKind,
   type Measurement,
   type Outcome,
@@ -18,7 +18,8 @@ import {
 } from './types.js';
 
 const FAMILY = /^[a-z0-9-]{1,80}$/;
-const METHOD = /^[A-Za-z0-9 ._-]{10,120}$/;
+const DIRECTORY_MODE = 0o700;
+const FILE_MODE = 0o600;
 
 export type Verification = {
   method: string;
@@ -34,25 +35,19 @@ export type Attempt = {
   outcome: Outcome;
 };
 
-export type LocalSession = {
-  id: string;
-  digest: string;
-  task_id: string | null;
+export type Observation = {
+  dedupe_key: string;
+  event: ProjectedHook['event'];
+  conversation_digest: string | null;
+  observed_at: string;
   cursor_version: string | null;
   model_id: string | null;
-  started_at: string | null;
-  ended_at: string | null;
-  end_reason: ProjectedHook['session_end_reason'];
   duration_ms: number | null;
-  tool_calls: number;
-  tool_failures: number;
-  tool_duration_sum_ms: number;
-  undated_tools: number;
-  intervals: Array<{ start: number; end: number }>;
-  prompt_events: number;
-  saw_prompt: boolean;
-  saw_boundary: boolean;
-  saw_tool: boolean;
+  failure: boolean;
+  tool: boolean;
+  stable_tool_id: boolean;
+  prompt: boolean;
+  session_end: boolean;
 };
 
 export type SdkNote = {
@@ -79,11 +74,11 @@ export type TaskRun = {
 };
 
 type State = {
-  schema: 1;
+  schema: 2;
   enabled: boolean;
   quarantined: boolean;
   tasks: TaskRun[];
-  sessions: LocalSession[];
+  observations: Observation[];
   snapshots: EnvironmentSnapshot[];
   seen: string[];
   max_hook_overhead_ms: number | null;
@@ -104,23 +99,37 @@ export type CollectorStatus = {
 
 function emptyState(): State {
   return {
-    schema: 1,
+    schema: 2,
     enabled: false,
     quarantined: false,
     tasks: [],
-    sessions: [],
+    observations: [],
     snapshots: [],
     seen: [],
     max_hook_overhead_ms: null,
   };
 }
 
+function ensurePrivateDirectory(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: DIRECTORY_MODE });
+  chmodSync(dir, DIRECTORY_MODE);
+}
+
+function writePrivateFile(file: string, contents: string): void {
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, contents, { mode: FILE_MODE });
+  chmodSync(temporary, FILE_MODE);
+  renameSync(temporary, file);
+  chmodSync(file, FILE_MODE);
+}
+
 function withLock<T>(dir: string, fn: () => T): T {
-  mkdirSync(dir, { recursive: true });
+  ensurePrivateDirectory(dir);
   const lock = path.join(dir, 'lock');
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
-      const fd = openSync(lock, 'wx');
+      const fd = openSync(lock, 'wx', FILE_MODE);
+      chmodSync(lock, FILE_MODE);
       closeSync(fd);
       try {
         return fn();
@@ -157,7 +166,7 @@ export class LocalTelemetry {
         cursor_sdk: 'usage_optional',
       },
       tasks: state.tasks.length,
-      sessions: state.sessions.length,
+      sessions: conversationCount(state.observations),
     };
   }
 
@@ -175,14 +184,14 @@ export class LocalTelemetry {
     });
   }
 
-  list(): Array<{ id: string; family: string; outcome: Outcome; attempts: number; sessions: number }> {
+  list(): Array<{ id: string; family: string; outcome: Outcome; attempts: number; sessions: number | null }> {
     const state = this.read();
     return state.tasks.map((task) => ({
       id: task.id,
       family: task.family,
       outcome: task.outcome,
       attempts: task.attempts.length,
-      sessions: state.sessions.filter((session) => session.task_id === task.id).length,
+      sessions: covering(state, task).unambiguousConversations,
     }));
   }
 
@@ -265,17 +274,13 @@ export class LocalTelemetry {
     if (!OUTCOMES.includes(outcome)) {
       throw new Error('Task outcome is not one of the known states.');
     }
-    if (outcome === 'success_verified') {
-      if (verification === null || !METHOD.test(verification.method) || !PROVENANCE.includes(verification.origin)) {
-        throw new Error('success_verified requires a verification method and origin.');
-      }
-    }
+    const accepted = acceptedVerification(outcome, verification);
     return this.update((state) => {
       const task = this.task(state, taskId);
       const current = this.now().toISOString();
       this.retakeSnapshot(state, task, current);
       task.outcome = outcome;
-      task.verification = outcome === 'success_verified' ? verification : null;
+      task.verification = accepted;
       task.ended_at = current;
       const open = task.attempts.find((attempt) => attempt.ended_at === null);
       if (open !== undefined) {
@@ -303,69 +308,21 @@ export class LocalTelemetry {
       if (state.max_hook_overhead_ms === null || projected.overhead_ms > state.max_hook_overhead_ms) {
         state.max_hook_overhead_ms = projected.overhead_ms;
       }
-      const digest = projected.conversation_digest;
-      if (digest === null) {
-        return { recorded: true };
-      }
-      let session = state.sessions.find((item) => item.digest === digest);
-      if (session === undefined) {
-        const open = state.tasks.filter((task) => task.ended_at === null);
-        session = {
-          id: randomUUID(),
-          digest,
-          task_id: open.length === 1 ? open[0]?.id ?? null : null,
-          cursor_version: projected.cursor_version,
-          model_id: projected.model_id,
-          started_at: projected.event === 'sessionStart' ? projected.observed_at : null,
-          ended_at: null,
-          end_reason: null,
-          duration_ms: null,
-          tool_calls: 0,
-          tool_failures: 0,
-          tool_duration_sum_ms: 0,
-          undated_tools: 0,
-          intervals: [],
-          prompt_events: 0,
-          saw_prompt: false,
-          saw_boundary: false,
-          saw_tool: false,
-        };
-        state.sessions.push(session);
-      }
-      if (projected.cursor_version !== null) {
-        session.cursor_version = projected.cursor_version;
-      }
-      if (projected.model_id !== null) {
-        session.model_id = projected.model_id;
-      }
-      if (projected.event === 'sessionStart') {
-        session.saw_boundary = true;
-        session.started_at ??= projected.observed_at;
-      }
-      if (projected.event === 'sessionEnd') {
-        session.saw_boundary = true;
-        session.ended_at = projected.observed_at;
-        session.end_reason = projected.session_end_reason;
-        session.duration_ms = projected.duration_ms;
-      }
-      if (projected.event === 'beforeSubmitPrompt') {
-        session.saw_prompt = true;
-        session.prompt_events += 1;
-      }
-      if (projected.event === 'postToolUse' || projected.event === 'postToolUseFailure') {
-        session.saw_tool = true;
-        if (projected.event === 'postToolUseFailure') {
-          session.tool_failures += 1;
-        }
-        session.tool_calls += 1;
-        if (projected.duration_ms === null) {
-          session.undated_tools += 1;
-        } else {
-          session.tool_duration_sum_ms += projected.duration_ms;
-          const end = Date.parse(projected.observed_at);
-          session.intervals.push({ start: end - projected.duration_ms, end });
-        }
-      }
+      const tool = projected.event === 'postToolUse' || projected.event === 'postToolUseFailure';
+      state.observations.push({
+        dedupe_key: projected.dedupe_key,
+        event: projected.event,
+        conversation_digest: projected.conversation_digest,
+        observed_at: projected.observed_at,
+        cursor_version: projected.cursor_version,
+        model_id: projected.model_id,
+        duration_ms: tool ? projected.duration_ms : projected.event === 'sessionEnd' ? projected.duration_ms : null,
+        failure: projected.event === 'postToolUseFailure',
+        tool,
+        stable_tool_id: projected.stable_tool_id,
+        prompt: projected.event === 'beforeSubmitPrompt',
+        session_end: projected.event === 'sessionEnd',
+      });
       return { recorded: true };
     });
   }
@@ -397,7 +354,7 @@ export class LocalTelemetry {
 
   preview(taskId: string): Record<string, unknown> {
     const state = this.read();
-    return buildReport(state, this.task(state, taskId));
+    return parseTelemetryReport(buildReport(state, this.task(state, taskId)));
   }
 
   deleteLocal(): { deleted: true } {
@@ -408,7 +365,7 @@ export class LocalTelemetry {
       next.quarantined = quarantined;
       next.enabled = enabled;
       state.tasks = next.tasks;
-      state.sessions = next.sessions;
+      state.observations = next.observations;
       state.snapshots = next.snapshots;
       state.seen = next.seen;
       state.max_hook_overhead_ms = null;
@@ -418,16 +375,16 @@ export class LocalTelemetry {
 
   private retakeSnapshot(state: State, task: TaskRun, capturedAt: string): void {
     const current = state.snapshots.find((item) => item.id === task.snapshot_ids.at(-1));
-    const session = state.sessions.find((item) => item.task_id === task.id && item.model_id !== null);
+    const covered = covering(state, task);
     const next = captureSnapshot({
       id: randomUUID(),
       capturedAt,
       root: this.root,
       platform: process.platform,
       nodeVersion: process.versions.node,
-      cursorVersion: session?.cursor_version ?? current?.cursor_version ?? null,
+      cursorVersion: covered.cursorVersion ?? current?.cursor_version ?? null,
       cliVersion: current?.cli_version ?? null,
-      modelId: session?.model_id ?? null,
+      modelId: covered.modelAttribution === 'single' ? covered.modelId : null,
       family: task.family,
       form: task.form,
       configurationFamily: task.configuration_family,
@@ -459,7 +416,7 @@ export class LocalTelemetry {
         cursor_sdk: 'usage_optional',
       },
       tasks: state.tasks.length,
-      sessions: state.sessions.length,
+      sessions: conversationCount(state.observations),
     };
   }
 
@@ -477,10 +434,10 @@ export class LocalTelemetry {
   }
 
   private read(): State {
-    mkdirSync(this.dir, { recursive: true });
+    ensurePrivateDirectory(this.dir);
     try {
       const parsed = JSON.parse(readFileSync(this.file(), 'utf8')) as State;
-      if (parsed.schema !== 1 || !Array.isArray(parsed.tasks)) {
+      if (parsed.schema !== 2 || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.observations)) {
         throw new Error('schema');
       }
       return parsed;
@@ -492,6 +449,7 @@ export class LocalTelemetry {
       const quarantined = path.join(this.dir, `state.corrupt-${Date.now()}.json`);
       try {
         renameSync(this.file(), quarantined);
+        chmodSync(quarantined, FILE_MODE);
       } catch {
         // The unreadable file stays in place when it cannot be moved.
       }
@@ -503,40 +461,123 @@ export class LocalTelemetry {
   }
 
   private write(state: State): void {
-    const file = this.file();
-    const temporary = `${file}.tmp`;
-    writeFileSync(temporary, JSON.stringify(state));
-    renameSync(temporary, file);
+    ensurePrivateDirectory(this.dir);
+    writePrivateFile(this.file(), JSON.stringify(state));
   }
 }
 
+type Coverage = {
+  mine: Observation[];
+  ambiguous: Observation[];
+  unambiguousConversations: number | null;
+  cursorVersion: string | null;
+  modelId: string | null;
+  modelAttribution: 'single' | 'mixed' | 'unknown';
+};
+
+function tasksCovering(state: State, observedAt: string): TaskRun[] {
+  const time = Date.parse(observedAt);
+  return state.tasks.filter((task) => {
+    const start = Date.parse(task.started_at);
+    const end = task.ended_at === null ? Number.POSITIVE_INFINITY : Date.parse(task.ended_at);
+    return time >= start && time <= end;
+  });
+}
+
+function covering(state: State, task: TaskRun): Coverage {
+  const mine: Observation[] = [];
+  const ambiguous: Observation[] = [];
+  for (const observation of state.observations) {
+    const owners = tasksCovering(state, observation.observed_at);
+    if (!owners.some((item) => item.id === task.id)) {
+      continue;
+    }
+    if (owners.length === 1) {
+      mine.push(observation);
+    } else {
+      ambiguous.push(observation);
+    }
+  }
+  const conversations = new Set(mine.map((item) => item.conversation_digest).filter((item) => item !== null));
+  const models = new Set<string>();
+  for (const observation of mine) {
+    if (observation.model_id !== null) {
+      models.add(observation.model_id);
+    }
+  }
+  if (task.sdk?.model_id !== null && task.sdk?.model_id !== undefined) {
+    models.add(task.sdk.model_id);
+  }
+  const toolEvents = mine.filter((item) => item.tool);
+  const modelMissing = toolEvents.some((item) => item.model_id === null) || (task.sdk !== null && task.sdk.model_id === null && toolEvents.length > 0);
+  let modelAttribution: Coverage['modelAttribution'] = 'unknown';
+  let modelId: string | null = null;
+  if (!modelMissing && models.size === 1) {
+    modelAttribution = 'single';
+    modelId = [...models][0] ?? null;
+  } else if (models.size > 1) {
+    modelAttribution = 'mixed';
+  }
+  return {
+    mine,
+    ambiguous,
+    unambiguousConversations: ambiguous.length === 0 ? conversations.size : null,
+    cursorVersion: mine.find((item) => item.cursor_version !== null)?.cursor_version ?? null,
+    modelId,
+    modelAttribution,
+  };
+}
+
+function conversationCount(observations: readonly Observation[]): number {
+  return new Set(observations.map((item) => item.conversation_digest).filter((item) => item !== null)).size;
+}
+
+function conversationSpansAnotherTask(state: State, task: TaskRun, digest: string): boolean {
+  return state.observations.some((observation) => {
+    if (observation.conversation_digest !== digest) {
+      return false;
+    }
+    const owners = tasksCovering(state, observation.observed_at);
+    return owners.length === 1 && owners[0]?.id !== task.id;
+  });
+}
+
 export function buildReport(state: State, task: TaskRun): Record<string, unknown> {
-  const sessions = state.sessions.filter((session) => session.task_id === task.id);
+  const covered = covering(state, task);
   const snapshot = state.snapshots.find((item) => item.id === task.snapshot_ids.at(-1));
-  const toolEvents = sessions.some((session) => session.saw_tool || session.saw_boundary);
-  const dated = sessions.every((session) => session.undated_tools === 0);
-  const durations = sessions.map((session) => session.duration_ms);
-  const sessionDuration = sessions.length === 1 && durations[0] !== undefined && durations[0] !== null
-    ? durations[0]
+  const tools = covered.mine.filter((item) => item.tool);
+  const prompts = covered.mine.filter((item) => item.prompt);
+  const ambiguousTools = covered.ambiguous.some((item) => item.tool);
+  const unstable = tools.some((item) => !item.stable_tool_id);
+  const undated = tools.some((item) => item.duration_ms === null);
+  const preciseTools = tools.length > 0 && !ambiguousTools && !unstable;
+  const intervals = preciseTools && !undated
+    ? tools.flatMap((item) => (
+      item.duration_ms === null
+        ? []
+        : [{ start: Date.parse(item.observed_at) - item.duration_ms, end: Date.parse(item.observed_at) }]
+    ))
+    : [];
+  const ends = covered.mine.filter((item) => item.session_end && item.duration_ms !== null);
+  const soleConversation = [...new Set(covered.mine.map((item) => item.conversation_digest).filter((item) => item !== null))];
+  const sessionDuration = soleConversation.length === 1
+    && ends.length === 1
+    && ends[0]?.conversation_digest === soleConversation[0]
+    && !conversationSpansAnotherTask(state, task, soleConversation[0] ?? '')
+    ? ends[0]?.duration_ms ?? null
     : null;
-  const intervals = sessions.flatMap((session) => session.intervals);
-  const busy = !toolEvents || !dated
-    ? null
-    : intervals.length === 0
-      ? 0
-      : unionDuration(intervals);
   const calendar = task.ended_at === null ? null : Date.parse(task.ended_at) - Date.parse(task.started_at);
+  const sawBoundary = covered.mine.some((item) => item.event === 'sessionStart' || item.session_end);
+  const toolCount = preciseTools || (sawBoundary && !ambiguousTools && !unstable) ? tools.length : null;
   const measurements: Measurement[] = [
-    countMeasurement('tool_call_count', toolEvents ? sessions.reduce((sum, session) => sum + session.tool_calls, 0) : null, 'cursor-ide'),
-    countMeasurement('tool_failure_count', toolEvents ? sessions.reduce((sum, session) => sum + session.tool_failures, 0) : null, 'cursor-ide'),
-    msMeasurement('tool_duration_sum_ms', toolEvents && dated ? sessions.reduce((sum, session) => sum + session.tool_duration_sum_ms, 0) : null, 'instrumented', 'cursor-ide'),
-    msMeasurement('tool_busy_ms', busy, 'derived', 'cursor-ide'),
+    countMeasurement('tool_call_count', toolCount, 'cursor-ide'),
+    countMeasurement('tool_failure_count', toolCount === null ? null : tools.filter((item) => item.failure).length, 'cursor-ide'),
+    msMeasurement('tool_duration_sum_ms', toolCount !== null && !undated && !unstable && !ambiguousTools ? tools.reduce((sum, item) => sum + (item.duration_ms ?? 0), 0) : null, 'instrumented', 'cursor-ide'),
+    msMeasurement('tool_busy_ms', toolCount !== null && !undated && !unstable && !ambiguousTools ? (intervals.length === 0 ? 0 : unionDuration(intervals)) : null, 'derived', 'cursor-ide'),
     msMeasurement('session_duration_ms', sessionDuration, 'instrumented', 'cursor-ide'),
     msMeasurement('task_calendar_ms', calendar, 'derived', 'local-clock'),
     msMeasurement('active_agent_ms', null, 'unknown', 'unknown'),
-    countMeasurement('prompt_count', sessions.some((session) => session.saw_prompt)
-      ? sessions.reduce((sum, session) => sum + session.prompt_events, 0)
-      : null, 'cursor-ide'),
+    countMeasurement('prompt_count', covered.ambiguous.some((item) => item.prompt) ? null : prompts.length > 0 ? prompts.length : null, 'cursor-ide'),
     msMeasurement('hook_overhead_ms', state.max_hook_overhead_ms, 'instrumented', 'cursor-ide'),
   ];
   if (task.sdk !== null) {
@@ -548,11 +589,11 @@ export function buildReport(state: State, task: TaskRun): Record<string, unknown
       sdkCost(undefined),
     );
   }
-  const host = task.sdk !== null && sessions.length > 0
+  const host = task.sdk !== null && covered.mine.length > 0
     ? 'mixed'
     : task.sdk !== null
       ? 'cursor-sdk'
-      : sessions.length > 0
+      : covered.mine.length > 0
         ? 'cursor-ide'
         : 'unknown';
   return {
@@ -563,9 +604,10 @@ export function buildReport(state: State, task: TaskRun): Record<string, unknown
       snapshot_id: snapshot?.id ?? null,
       previous_snapshot_ids: task.snapshot_ids.slice(0, -1),
       host,
-      cursor_version: snapshot?.cursor_version ?? null,
+      cursor_version: snapshot?.cursor_version ?? covered.cursorVersion,
       cli_version: snapshot?.cli_version ?? null,
-      model_id: snapshot?.model_id ?? sessions.find((session) => session.model_id !== null)?.model_id ?? null,
+      model_id: covered.modelId,
+      model_attribution: covered.modelAttribution,
       os_family: snapshot?.os_family ?? 'unknown',
       tools: snapshot?.tools ?? [],
       rules: snapshot?.rules ?? [],
@@ -581,7 +623,7 @@ export function buildReport(state: State, task: TaskRun): Record<string, unknown
       family: task.family,
       outcome: task.outcome,
       attempt_count: task.attempts.length,
-      session_count: sessions.length,
+      session_count: covered.unambiguousConversations,
       verification: task.verification,
     },
     measurements,

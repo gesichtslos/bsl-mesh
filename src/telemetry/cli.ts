@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { LocalTelemetry, type Verification } from './store.js';
+import { parseTelemetryReport } from './schema.js';
 import type { FormKind, Outcome, SourceKind } from './types.js';
 
 const FORMS = new Set(['ordinary', 'managed', 'unknown']);
@@ -109,12 +110,16 @@ export async function runTelemetryCli(
       const method = flag(argv, '--method');
       const origin = flag(argv, '--origin');
       const exitCode = flag(argv, '--exit-code');
+      const knownOrigin = origin === 'instrumented' || origin === 'owner_reported' || origin === 'agent_reported'
+        || origin === 'provider_reported' || origin === 'derived'
+        ? origin
+        : null;
+      if (origin !== null && knownOrigin === null) {
+        throw new Error('Request failed validation.');
+      }
       const verification: Verification | null = method === null ? null : {
         method,
-        origin: origin === 'instrumented' || origin === 'owner_reported' || origin === 'agent_reported'
-          || origin === 'provider_reported' || origin === 'derived' || origin === 'unknown'
-          ? origin
-          : 'owner_reported',
+        origin: knownOrigin ?? 'owner_reported',
         observed_exit_code: exitCode === null ? null : Number(exitCode),
       };
       stdout(`${JSON.stringify(collector.finishTask(task, outcome as Outcome, verification))}\n`);
@@ -125,13 +130,14 @@ export async function runTelemetryCli(
       if (task === null) {
         throw new Error(`${command} requires --task.`);
       }
-      const report = collector.preview(task);
+      const report = parseTelemetryReport(collector.preview(task));
       if (command === 'export') {
         const out = flag(argv, '--out');
         if (out === null) {
           throw new Error('export requires --out.');
         }
-        writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
+        writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+        chmodSync(out, 0o600);
       }
       stdout(`${JSON.stringify(report)}\n`);
       return 0;
@@ -143,7 +149,7 @@ export async function runTelemetryCli(
       if (task === null || server === null || token === undefined || token === '') {
         throw new Error('submit requires --task, --server, and BSLMESH_TELEMETRY_TOKEN.');
       }
-      const report = collector.preview(task);
+      const report = parseTelemetryReport(collector.preview(task));
       const response = await fetch(new URL('/api/v1/telemetry/reports', server), {
         method: 'POST',
         headers: {

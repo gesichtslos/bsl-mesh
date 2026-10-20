@@ -78,4 +78,5 @@ export type ProjectedHook = {
   session_end_reason: 'completed' | 'aborted' | 'error' | 'window_close' | 'user_close' | null;
   observed_at: string;
   overhead_ms: number;
+  stable_tool_id: boolean;
 };

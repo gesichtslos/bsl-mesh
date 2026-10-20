@@ -17,7 +17,7 @@ const METHOD = /^[A-Za-z0-9 ._-]{10,120}$/;
 const TOP_KEYS = ['schema_version', 'report_id', 'source_kind', 'environment', 'task', 'measurements'];
 const ENV_KEYS = [
   'snapshot_id', 'previous_snapshot_ids', 'host', 'cursor_version', 'cli_version', 'model_id',
-  'os_family', 'tools', 'rules', 'skills', 'mcp_components', 'task_family', 'context',
+  'model_attribution', 'os_family', 'tools', 'rules', 'skills', 'mcp_components', 'task_family', 'context',
 ];
 const TASK_KEYS = ['family', 'outcome', 'attempt_count', 'session_count', 'verification'];
 const MEASURE_KEYS = ['name', 'unit', 'value', 'state', 'provenance', 'source'];
@@ -42,6 +42,35 @@ const UNITS: Record<MeasurementName, 'count' | 'millisecond' | 'token' | 'usd'> 
 
 function fail(): never {
   throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
+}
+
+export function acceptedVerification(outcome: Outcome, verification: unknown): {
+  method: string;
+  origin: Provenance;
+  observed_exit_code: number | null;
+} | null {
+  if (outcome !== 'success_verified') {
+    if (verification !== null && verification !== undefined) {
+      fail();
+    }
+    return null;
+  }
+  const body = record(verification, ['method', 'origin', 'observed_exit_code']);
+  if (typeof body['method'] !== 'string' || !METHOD.test(body['method'])) {
+    fail();
+  }
+  if (typeof body['origin'] !== 'string' || !PROVENANCE.includes(body['origin'] as Provenance) || body['origin'] === 'unknown') {
+    fail();
+  }
+  const exitCode = body['observed_exit_code'];
+  if (exitCode !== null && (typeof exitCode !== 'number' || !Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)) {
+    fail();
+  }
+  return {
+    method: body['method'],
+    origin: body['origin'] as Provenance,
+    observed_exit_code: exitCode as number | null,
+  };
 }
 
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -152,7 +181,17 @@ export function parseTelemetryReport(input: unknown): Record<string, unknown> {
   }
   nullableSlug(environment['cursor_version']);
   nullableSlug(environment['cli_version']);
-  nullableSlug(environment['model_id']);
+  const modelAttribution = environment['model_attribution'];
+  if (modelAttribution !== 'single' && modelAttribution !== 'mixed' && modelAttribution !== 'unknown') {
+    fail();
+  }
+  const modelId = nullableSlug(environment['model_id']);
+  if (modelAttribution === 'single' && modelId === null) {
+    fail();
+  }
+  if (modelAttribution !== 'single' && modelId !== null) {
+    fail();
+  }
   const os = environment['os_family'];
   if (os !== 'linux' && os !== 'darwin' && os !== 'windows' && os !== 'unknown') {
     fail();
@@ -188,24 +227,15 @@ export function parseTelemetryReport(input: unknown): Record<string, unknown> {
   if (typeof task['attempt_count'] !== 'number' || !Number.isInteger(task['attempt_count']) || task['attempt_count'] < 1 || task['attempt_count'] > 100) {
     fail();
   }
-  if (typeof task['session_count'] !== 'number' || !Number.isInteger(task['session_count']) || task['session_count'] < 0 || task['session_count'] > 100) {
+  if (task['session_count'] !== null && (
+    typeof task['session_count'] !== 'number'
+    || !Number.isInteger(task['session_count'])
+    || task['session_count'] < 0
+    || task['session_count'] > 100
+  )) {
     fail();
   }
-  if (task['outcome'] === 'success_verified') {
-    const verification = record(task['verification'], ['method', 'origin', 'observed_exit_code']);
-    if (typeof verification['method'] !== 'string' || !METHOD.test(verification['method'])) {
-      fail();
-    }
-    if (typeof verification['origin'] !== 'string' || !PROVENANCE.includes(verification['origin'] as Provenance) || verification['origin'] === 'unknown') {
-      fail();
-    }
-    const exitCode = verification['observed_exit_code'];
-    if (exitCode !== null && (typeof exitCode !== 'number' || !Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)) {
-      fail();
-    }
-  } else if (task['verification'] !== null) {
-    fail();
-  }
+  acceptedVerification(task['outcome'] as Outcome, task['verification']);
   if (!Array.isArray(body['measurements']) || body['measurements'].length < 1 || body['measurements'].length > 40) {
     fail();
   }

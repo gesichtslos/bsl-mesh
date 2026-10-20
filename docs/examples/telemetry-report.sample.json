@@ -11,6 +11,7 @@
     "cursor_version": "3.24.18",
     "cli_version": "2026.10.16-e3cb207",
     "model_id": "grok-4.7",
+    "model_attribution": "single",
     "os_family": "linux",
     "tools": [
       {

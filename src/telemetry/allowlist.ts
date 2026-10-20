@@ -58,11 +58,23 @@ export function projectHook(input: unknown, observedAt: string, overheadMs: numb
     return null;
   }
   const model = slug(body['model_id']) ?? slug(body['model']);
-  const dedupeKey = toolUse !== null && (event === 'preToolUse' || event === 'postToolUse' || event === 'postToolUseFailure')
+  const toolEvent = event === 'preToolUse' || event === 'postToolUse' || event === 'postToolUseFailure';
+  const stableToolId = toolEvent && toolUse !== null;
+  const dedupeKey = stableToolId
     ? digest(`${event}:${toolUse}`)
-    : event === 'sessionStart' || event === 'sessionEnd'
-      ? digest(`${event}:${session}`)
-      : digest(`${event}:${session}:${generation}`);
+    : toolEvent
+      ? digest([
+        event,
+        session,
+        generation,
+        slug(body['tool_name']),
+        duration(body['duration'] ?? body['duration_ms']),
+        enumValue(body['failure_type'], FAILURES),
+        observedAt,
+      ].join(':'))
+      : event === 'sessionStart' || event === 'sessionEnd'
+        ? digest(`${event}:${session}`)
+        : digest(`${event}:${session}:${generation}`);
   const projected: ProjectedHook = {
     event,
     dedupe_key: dedupeKey,
@@ -77,6 +89,7 @@ export function projectHook(input: unknown, observedAt: string, overheadMs: numb
     session_end_reason: event === 'sessionEnd' ? enumValue(body['reason'], SESSION_END) : null,
     observed_at: observedAt,
     overhead_ms: duration(overheadMs) ?? 0,
+    stable_tool_id: stableToolId,
   };
   return projected;
 }

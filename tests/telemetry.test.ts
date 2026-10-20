@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -189,7 +189,143 @@ describe('local task outcomes', () => {
     });
     const report = telemetry.preview(task.id);
     expect(() => parseTelemetryReport({ ...report, prompt: PROMPT })).toThrow(/validation/i);
-    expect(() => telemetry.finishTask(task.id, 'success_verified', null)).toThrow(/verification/);
+    expect(() => telemetry.finishTask(task.id, 'success_verified', null)).toThrow(/validation/i);
+    expect(() => telemetry.finishTask(task.id, 'success_verified', {
+      method: 'Owner checked the fixture.',
+      origin: 'unknown',
+      observed_exit_code: 0,
+    })).toThrow(/validation/i);
+    const verified = telemetry.finishTask(task.id, 'success_verified', {
+      method: 'Owner checked the fixture.',
+      origin: 'owner_reported',
+      observed_exit_code: 0,
+    });
+    expect(verified.outcome).toBe('success_verified');
+    expect(parseTelemetryReport(telemetry.preview(task.id))['task']).toMatchObject({ outcome: 'success_verified' });
+  });
+
+  test('keeps sequential tasks in one conversation on their own call counts', () => {
+    const { telemetry, at } = collector();
+    telemetry.enable();
+    const started = {
+      form: 'unknown' as const,
+      sourceKind: 'synthetic' as const,
+      configurationFamily: null,
+      mcpIds: [],
+      cursorVersion: null,
+      cliVersion: null,
+    };
+    at('2026-10-20T00:00:00.000Z');
+    const first = telemetry.startTask({ ...started, family: 'task-a' });
+    at('2026-10-20T00:00:01.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 10, tool_use_id: 'a-1' }), 1);
+    at('2026-10-20T00:00:02.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 10, tool_use_id: 'a-2' }), 1);
+    at('2026-10-20T00:00:03.000Z');
+    telemetry.finishTask(first.id, 'unknown', null);
+    at('2026-10-20T00:00:04.000Z');
+    const second = telemetry.startTask({ ...started, family: 'task-b' });
+    for (const [index, id] of ['b-1', 'b-2', 'b-3'].entries()) {
+      at(`2026-10-20T00:00:0${index + 5}.000Z`);
+      telemetry.ingest(hook('postToolUse', { duration: 10, tool_use_id: id }), 1);
+    }
+    const calls = (taskId: string) => (
+      (telemetry.preview(taskId)['measurements'] as Array<{ name: string; value: number | null }>)
+        .find((item) => item.name === 'tool_call_count')?.value
+    );
+    expect(calls(first.id)).toBe(2);
+    expect(calls(second.id)).toBe(3);
+  });
+
+  test('does not count one call twice while two tasks overlap', () => {
+    const { telemetry, at } = collector();
+    telemetry.enable();
+    const started = {
+      form: 'unknown' as const,
+      sourceKind: 'synthetic' as const,
+      configurationFamily: null,
+      mcpIds: [],
+      cursorVersion: null,
+      cliVersion: null,
+    };
+    at('2026-10-20T00:00:00.000Z');
+    const first = telemetry.startTask({ ...started, family: 'task-a' });
+    at('2026-10-20T00:00:01.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 1000, tool_use_id: 'only-a' }), 1);
+    at('2026-10-20T00:00:02.000Z');
+    const second = telemetry.startTask({ ...started, family: 'task-b' });
+    at('2026-10-20T00:00:03.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 1000, tool_use_id: 'shared' }), 1);
+    at('2026-10-20T00:00:04.000Z');
+    telemetry.finishTask(first.id, 'unknown', null);
+    at('2026-10-20T00:00:05.000Z');
+    telemetry.finishTask(second.id, 'unknown', null);
+    const calls = (taskId: string) => (
+      (telemetry.preview(taskId)['measurements'] as Array<{ name: string; value: number | null; state: string }>)
+        .find((item) => item.name === 'tool_call_count')
+    );
+    expect(calls(first.id)).toMatchObject({ value: null, state: 'unknown' });
+    expect(calls(second.id)).toMatchObject({ value: null, state: 'unknown' });
+  });
+
+  test('does not turn tool calls without an id into an exact count', () => {
+    const repeated = projectHook(hook('postToolUse', { duration: 5, tool_use_id: 'same' }), '2026-10-20T00:00:01.000Z', 1);
+    const replay = projectHook(hook('postToolUse', { duration: 9, tool_use_id: 'same' }), '2026-10-20T00:00:02.000Z', 1);
+    expect(repeated?.dedupe_key).toBe(replay?.dedupe_key);
+    const left = projectHook(hook('postToolUse', { duration: 5, tool_use_id: undefined }), '2026-10-20T00:00:01.000Z', 1);
+    const right = projectHook(hook('postToolUse', { duration: 8, tool_use_id: undefined }), '2026-10-20T00:00:02.000Z', 1);
+    expect(left?.dedupe_key).not.toBe(right?.dedupe_key);
+    const { telemetry, at } = collector();
+    telemetry.enable();
+    const task = telemetry.startTask({
+      family: 'synthetic-read',
+      form: 'unknown',
+      sourceKind: 'synthetic',
+      configurationFamily: null,
+      mcpIds: [],
+      cursorVersion: null,
+      cliVersion: null,
+    });
+    at('2026-10-20T00:00:01.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 5, tool_use_id: undefined }), 1);
+    telemetry.ingest(hook('postToolUse', { duration: 5, tool_use_id: undefined }), 1);
+    at('2026-10-20T00:00:02.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 8, tool_use_id: undefined, tool_name: 'Shell' }), 1);
+    const measurement = (telemetry.preview(task.id)['measurements'] as Array<{ name: string; value: number | null; state: string }>)
+      .find((item) => item.name === 'tool_call_count');
+    expect(measurement).toMatchObject({ value: null, state: 'unknown' });
+  });
+
+  test('does not assign every call to the last model', () => {
+    const { telemetry, at } = collector();
+    telemetry.enable();
+    const task = telemetry.startTask({
+      family: 'synthetic-read',
+      form: 'unknown',
+      sourceKind: 'synthetic',
+      configurationFamily: null,
+      mcpIds: [],
+      cursorVersion: null,
+      cliVersion: null,
+    });
+    at('2026-10-20T00:00:01.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 10, tool_use_id: 'model-a-call', model_id: 'model-a' }), 1);
+    at('2026-10-20T00:00:02.000Z');
+    telemetry.ingest(hook('postToolUse', { duration: 10, tool_use_id: 'model-b-call', model_id: 'model-b' }), 1);
+    const report = telemetry.preview(task.id);
+    expect(report['environment']).toMatchObject({ model_id: null, model_attribution: 'mixed' });
+    expect((report['measurements'] as Array<{ name: string; value: number | null }>)
+      .find((item) => item.name === 'tool_call_count')?.value).toBe(2);
+    expect(JSON.stringify(report)).toContain('"name":"input_tokens","unit":"token","value":null,"state":"unknown"');
+  });
+
+  test('keeps the telemetry directory and files private across rewrite', () => {
+    const { telemetry } = collector();
+    telemetry.enable();
+    const dir = telemetry.status().store_dir;
+    telemetry.enable();
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(path.join(dir, 'state.json')).mode & 0o777).toBe(0o600);
   });
 });
 
@@ -205,6 +341,7 @@ test('the cli reports collection as disabled and does not fail a bad hook', asyn
   const code = await runTelemetryCli(['status'], { BSLMESH_TELEMETRY_HOME: home, HOME: home }, '', (line) => lines.push(line));
   expect(code).toBe(0);
   expect(lines[0]).toContain('"enabled":false');
-  const hookCode = await runTelemetryCli(['hook'], { BSLMESH_TELEMETRY_HOME: home, HOME: home }, '{', (line) => lines.push(line));
+  const hookCode = await runTelemetryCli(['hook'], { BSLMESH_TELEMETRY_HOME: home, HOME: home }, `{"prompt":"${SECRET}"`, (line) => lines.push(line));
   expect(hookCode).toBe(0);
+  expect(lines.join('')).not.toContain(SECRET);
 });
