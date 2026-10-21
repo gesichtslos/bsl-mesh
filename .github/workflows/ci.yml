@@ -83,3 +83,13 @@ jobs:
           PGHOST: 127.0.0.1
           PGPORT: "5432"
           PGDATABASE: bslmesh_dev
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the application image
+        run: docker build -t bsl-mesh-app:ci .
+      - name: Check the security manifest is in the image and other docs are not
+        run: |
+          docker run --rm --user root --entrypoint sh bsl-mesh-app:ci -c 'test -s docs/08-CLIENT-SECURITY-MANIFEST.md && test ! -e docs/00-VISION.md && test ! -e .env && test ! -e backups && test ! -e secrets'
