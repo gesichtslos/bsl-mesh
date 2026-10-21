@@ -5,6 +5,7 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@12.14.0 --activate
 
 COPY package.json pnpm-lock.yaml ./
+COPY scripts/install-git-hooks.mjs scripts/install-git-hooks.mjs
 RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.json ./

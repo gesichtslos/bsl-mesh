@@ -12,6 +12,7 @@ secrets
 !.env.example
 *.md
 !README.md
-docs
+docs/**
+!docs/08-CLIENT-SECURITY-MANIFEST.md
 tests
 .github
