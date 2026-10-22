@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { BackupError, HEADER_LENGTH, decryptBuffer, decryptFile, encryptReadable, encryptToFile } from './lib/backup-crypto.mjs';
+import { BackupError, HEADER_LENGTH, decryptBuffer, decryptFile, encryptPrepared, encryptReadable, prepareEncryption } from './lib/backup-crypto.mjs';
 import { createBucket, getObject, putObject } from './lib/s3-request.mjs';
 
 const REQUIRED = [
@@ -58,15 +58,27 @@ export async function createBackup(input) {
   const directory = await mkdtemp(path.join(input.tempRoot ?? tmpdir(), 'bslmesh-backup-'));
   await chmod(directory, 0o700);
   const encryptedPath = path.join(directory, 'backup.bsm1');
+  let dump = null;
   try {
-    const dump = input.spawnDump();
+    const prepared = await prepareEncryption(input.passphrase);
+    dump = input.spawnDump();
     dump.stderr?.on('data', () => undefined);
-    const closed = waitForClose(dump);
+    let settled = false;
+    const closed = waitForClose(dump).finally(() => {
+      settled = true;
+    });
+    const stopIfRunning = () => {
+      if (!settled) {
+        dump.kill('SIGKILL');
+      }
+    };
+    let encrypted = null;
     let encryptionError = null;
     try {
-      await encryptToFile(dump.stdout, encryptedPath, input.passphrase);
+      encrypted = await encryptPrepared(dump.stdout, encryptedPath, prepared);
     } catch (error) {
       encryptionError = error;
+      stopIfRunning();
     }
     const code = await closed;
     if (code !== 0) {
@@ -75,26 +87,28 @@ export async function createBackup(input) {
     if (encryptionError !== null) {
       throw encryptionError;
     }
-    const body = await readFile(encryptedPath);
-    if (body.length <= HEADER_LENGTH + 16) {
+    if (encrypted.bytes <= HEADER_LENGTH + 16) {
       throw new BackupError('Database dump failed.');
     }
-    const payloadHash = createHash('sha256').update(body).digest('hex');
     const key = input.objectKey ?? backupObjectKey(input.now);
-    await input.putObject({ key, body, payloadHash });
-    return { key, bytes: body.length };
+    await input.putObject({
+      key,
+      filePath: encryptedPath,
+      contentLength: encrypted.bytes,
+      payloadHash: encrypted.sha256,
+    });
+    return { key, bytes: encrypted.bytes };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 export async function downloadVerified(input) {
-  const downloaded = await input.getObject(input.key);
-  const actual = createHash('sha256').update(downloaded.body).digest('hex');
-  if (actual !== downloaded.metadata || actual.length !== 64) {
+  const downloaded = await input.getObject({ key: input.key, filePath: input.encryptedPath });
+  if (!/^[0-9a-f]{64}$/.test(downloaded.sha256) || downloaded.sha256 !== downloaded.metadata) {
     throw new BackupError('Backup integrity check failed.');
   }
-  return downloaded.body;
+  return downloaded;
 }
 
 export async function verifyBackup(input) {
@@ -103,8 +117,7 @@ export async function verifyBackup(input) {
   const encryptedPath = path.join(directory, 'backup.bsm1');
   const plainPath = path.join(directory, 'backup.dump');
   try {
-    const body = await downloadVerified(input);
-    await writeFile(encryptedPath, body, { mode: 0o600 });
+    await downloadVerified({ ...input, encryptedPath });
     await decryptFile(encryptedPath, plainPath, input.passphrase);
     const listing = await input.listArchive(plainPath);
     if (!listing.includes('TABLE public app_meta')) {
@@ -125,8 +138,7 @@ export async function restoreBackup(input) {
   const plainPath = path.join(directory, 'backup.dump');
   let created = false;
   try {
-    const body = await downloadVerified(input);
-    await writeFile(encryptedPath, body, { mode: 0o600 });
+    await downloadVerified({ ...input, encryptedPath });
     await decryptFile(encryptedPath, plainPath, input.passphrase);
     await rm(encryptedPath, { force: true });
     if (await input.databaseExists(input.target)) {

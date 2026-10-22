@@ -70,7 +70,10 @@ uploaded="$(node scripts/production-backup.mjs backup)"
 key="$(printf '%s\n' "${uploaded}" | awk '{print $2}')"
 node scripts/production-backup.mjs verify "${key}"
 BACKUP_OBJECT_KEY="${key}" node --input-type=module <<'EOF'
-import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { getObject } from './scripts/lib/s3-request.mjs';
 const config = {
   endpoint: process.env.BACKUP_S3_ENDPOINT,
@@ -79,22 +82,101 @@ const config = {
   accessKeyId: process.env.BACKUP_S3_ACCESS_KEY_ID,
   secretAccessKey: process.env.BACKUP_S3_SECRET_ACCESS_KEY,
 };
-const downloaded = await getObject(config, process.env.BACKUP_OBJECT_KEY);
-if (downloaded.body.includes(Buffer.from('synthetic-backup-marker'))) {
-  process.stderr.write('ciphertext contains the plaintext marker\n');
-  process.exit(1);
+const directory = await mkdtemp(path.join(tmpdir(), 'bslmesh-cipher-'));
+const filePath = path.join(directory, 'backup.bsm1');
+try {
+  const downloaded = await getObject(config, { key: process.env.BACKUP_OBJECT_KEY, filePath });
+  const marker = Buffer.from('synthetic-backup-marker');
+  let pending = Buffer.alloc(0);
+  for await (const chunk of createReadStream(filePath)) {
+    const window = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+    if (window.includes(marker)) {
+      process.stderr.write('ciphertext contains the plaintext marker\n');
+      process.exit(1);
+    }
+    pending = window.subarray(Math.max(0, window.length - marker.length + 1));
+  }
+  if (downloaded.sha256 !== downloaded.metadata) {
+    process.stderr.write('stored checksum does not match the ciphertext\n');
+    process.exit(1);
+  }
+  process.stdout.write('ciphertext-checked\n');
+} finally {
+  await rm(directory, { recursive: true, force: true });
 }
-if (createHash('sha256').update(downloaded.body).digest('hex') !== downloaded.metadata) {
-  process.stderr.write('stored checksum does not match the ciphertext\n');
-  process.exit(1);
-}
-process.stdout.write('ciphertext-checked\n');
 EOF
 
 node scripts/production-backup.mjs restore "${key}" bslmesh_backup_check
 label="$(docker exec "${pg_name}" psql -U bslmesh_admin -d bslmesh_backup_check -tAc "SELECT label FROM backup_marker WHERE id = 1;")"
 label="$(printf '%s' "${label}" | tr -d '[:space:]')"
 test "${label}" = "synthetic-backup-marker"
+
+node --expose-gc --input-type=module <<'EOF'
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { encryptPrepared, prepareEncryption } from './scripts/lib/backup-crypto.mjs';
+import { getObject, putObject } from './scripts/lib/s3-request.mjs';
+const size = 64 * 1024 * 1024;
+const config = {
+  endpoint: process.env.BACKUP_S3_ENDPOINT,
+  bucket: process.env.BACKUP_S3_BUCKET,
+  region: process.env.BACKUP_S3_REGION,
+  accessKeyId: process.env.BACKUP_S3_ACCESS_KEY_ID,
+  secretAccessKey: process.env.BACKUP_S3_SECRET_ACCESS_KEY,
+};
+const prepared = await prepareEncryption(process.env.BACKUP_PASSPHRASE);
+global.gc();
+const before = process.memoryUsage();
+const base = before.heapUsed + before.external;
+let peak = base;
+const timer = setInterval(() => {
+  const usage = process.memoryUsage();
+  peak = Math.max(peak, usage.heapUsed + usage.external);
+}, 5);
+const root = await mkdtemp(path.join(tmpdir(), 'bslmesh-s3-memory-'));
+try {
+  const child = spawn(process.execPath, ['-e', `
+    const size = ${size};
+    const chunk = Buffer.alloc(65536, 7);
+    let remaining = size;
+    function write() {
+      if (remaining === 0) { process.exit(0); return; }
+      const slice = remaining >= chunk.length ? chunk : chunk.subarray(0, remaining);
+      remaining -= slice.length;
+      if (!process.stdout.write(slice)) process.stdout.once('drain', write);
+      else setImmediate(write);
+    }
+    write();
+  `]);
+  child.stderr.on('data', () => undefined);
+  const closed = new Promise((resolve) => child.on('close', resolve));
+  const encryptedPath = path.join(root, 'backup.bsm1');
+  const encrypted = await encryptPrepared(child.stdout, encryptedPath, prepared);
+  if (await closed !== 0) throw new Error('large dump failed');
+  const key = 'bslmesh/bslmesh_dev-20261022T010000Z-a1b2c3d4.bsm1';
+  await putObject(config, {
+    key,
+    filePath: encryptedPath,
+    contentLength: encrypted.bytes,
+    payloadHash: encrypted.sha256,
+  });
+  const downloadedPath = path.join(root, 'downloaded.bsm1');
+  const downloaded = await getObject(config, { key, filePath: downloadedPath });
+  if (downloaded.sha256 !== encrypted.sha256 || downloaded.metadata !== encrypted.sha256) {
+    throw new Error('large object checksum mismatch');
+  }
+} finally {
+  clearInterval(timer);
+  await rm(root, { recursive: true, force: true });
+}
+const growth = peak - base;
+process.stdout.write(`s3-memory bytes=${size} peakGrowth=${growth}\n`);
+if (growth > 80 * 1024 * 1024) {
+  throw new Error('S3 transfer retained too much memory');
+}
+EOF
 
 set +e
 BACKUP_PASSPHRASE=wrong-passphrase-value node scripts/production-backup.mjs verify "${key}" >/tmp/bslmesh-backup-rehearsal.err 2>&1

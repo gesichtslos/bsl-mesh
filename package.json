@@ -23,6 +23,7 @@
     "telemetry": "node dist/telemetry/main.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1146.0",
     "@modelcontextprotocol/fastify": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",

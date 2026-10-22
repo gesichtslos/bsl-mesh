@@ -1,15 +1,28 @@
-import { createHash, createHmac } from 'node:crypto';
+import { CreateBucketCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { createHash } from 'node:crypto';
+import { BlockList, isIP } from 'node:net';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { chmod, stat } from 'node:fs/promises';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 import { BackupError } from './backup-crypto.mjs';
 
-const EMPTY_PAYLOAD_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-
 export function assertS3Config(config) {
-  const endpoint = new URL(config.endpoint);
+  let endpoint;
+  try {
+    endpoint = new URL(config.endpoint);
+  } catch {
+    throw new BackupError('S3 endpoint must be an http(s) URL.');
+  }
   if (endpoint.username !== '' || endpoint.password !== '') {
     throw new BackupError('S3 endpoint must not contain credentials.');
   }
-  if (endpoint.protocol !== 'http:' && endpoint.protocol !== 'https:') {
+  if (endpoint.protocol === 'http:') {
+    if (!isLoopback(endpoint.hostname)) {
+      throw new BackupError('Remote S3 endpoints must use HTTPS.');
+    }
+  } else if (endpoint.protocol !== 'https:') {
     throw new BackupError('S3 endpoint must be an http(s) URL.');
   }
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(config.bucket)) {
@@ -23,88 +36,86 @@ export function assertS3Config(config) {
   }
 }
 
-export function objectUrl(config, key) {
+export async function putObject(config, { key, filePath, contentLength, payloadHash }) {
   assertObjectKey(key);
-  const endpoint = new URL(config.endpoint);
-  const path = `/${config.bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
-  return new URL(`${endpoint.origin}${path}`);
+  if (!/^[0-9a-f]{64}$/.test(payloadHash)) {
+    throw new BackupError('Backup integrity check failed.');
+  }
+  const client = openClient(config);
+  try {
+    await client.send(new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+      Body: createReadStream(filePath),
+      ContentLength: contentLength,
+      ContentType: 'application/octet-stream',
+      Metadata: { 'ciphertext-sha256': payloadHash },
+    }));
+  } catch (error) {
+    throw asS3Error(error);
+  } finally {
+    client.destroy();
+  }
 }
 
-export async function putObject(config, { key, body, payloadHash }) {
-  const url = objectUrl(config, key);
-  const headers = sign(config, {
-    method: 'PUT',
-    url,
-    payloadHash,
-    extra: {
-      'content-type': 'application/octet-stream',
-      'x-amz-meta-ciphertext-sha256': payloadHash,
-    },
-  });
-  headers['content-length'] = String(body.length);
-  const response = await fetch(url, { method: 'PUT', headers, body });
-  await finish(response);
-}
-
-export async function getObject(config, key) {
-  const url = objectUrl(config, key);
-  const headers = sign(config, { method: 'GET', url, payloadHash: EMPTY_PAYLOAD_HASH, extra: {} });
-  const response = await fetch(url, { method: 'GET', headers });
-  const metadata = (response.headers.get('x-amz-meta-ciphertext-sha256') ?? '').trim();
-  const body = await finish(response);
-  return { body, metadata };
+export async function getObject(config, { key, filePath }) {
+  assertObjectKey(key);
+  const client = openClient(config);
+  const hash = createHash('sha256');
+  const output = createWriteStream(filePath, { flags: 'wx', mode: 0o600 });
+  try {
+    const response = await client.send(new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+    }));
+    if (response.Body?.pipe === undefined) {
+      throw new BackupError('S3 request failed.');
+    }
+    const metadata = (response.Metadata?.['ciphertext-sha256'] ?? '').trim();
+    const hasher = new Transform({
+      transform(chunk, _encoding, callback) {
+        hash.update(chunk);
+        callback(null, chunk);
+      },
+    });
+    await pipeline(response.Body, hasher, output);
+    return {
+      sha256: hash.digest('hex'),
+      metadata,
+      bytes: (await stat(filePath)).size,
+    };
+  } catch (error) {
+    throw asS3Error(error);
+  } finally {
+    client.destroy();
+    await chmod(filePath, 0o600).catch(() => undefined);
+  }
 }
 
 export async function createBucket(config) {
-  const endpoint = new URL(config.endpoint);
-  const url = new URL(`${endpoint.origin}/${config.bucket}`);
-  const headers = sign(config, { method: 'PUT', url, payloadHash: EMPTY_PAYLOAD_HASH, extra: {} });
-  headers['content-length'] = '0';
-  const response = await fetch(url, { method: 'PUT', headers });
-  await finish(response);
+  const client = openClient(config);
+  try {
+    await client.send(new CreateBucketCommand({ Bucket: config.bucket }));
+  } catch (error) {
+    throw asS3Error(error);
+  } finally {
+    client.destroy();
+  }
 }
 
-export function sign(config, { method, url, payloadHash, extra, now = new Date() }) {
+function openClient(config) {
   assertS3Config(config);
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-  const headers = {
-    host: url.host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
-    ...extra,
-  };
-  const names = Object.keys(headers).sort();
-  const canonicalHeaders = names.map((name) => `${name}:${headers[name].trim()}\n`).join('');
-  const canonical = [
-    method,
-    url.pathname,
-    '',
-    canonicalHeaders,
-    names.join(';'),
-    payloadHash,
-  ].join('\n');
-  const scope = `${dateStamp}/${config.region}/s3/aws4_request`;
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    scope,
-    createHash('sha256').update(canonical).digest('hex'),
-  ].join('\n');
-  const signature = createHmac('sha256', signingKey(config.secretAccessKey, dateStamp, config.region))
-    .update(stringToSign)
-    .digest('hex');
-  return {
-    ...headers,
-    authorization: `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${names.join(';')}, Signature=${signature}`,
-  };
-}
-
-function signingKey(secret, dateStamp, region) {
-  const dateKey = createHmac('sha256', `AWS4${secret}`).update(dateStamp).digest();
-  const regionKey = createHmac('sha256', dateKey).update(region).digest();
-  const serviceKey = createHmac('sha256', regionKey).update('s3').digest();
-  return createHmac('sha256', serviceKey).update('aws4_request').digest();
+  return new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
+  });
 }
 
 function assertObjectKey(key) {
@@ -113,10 +124,29 @@ function assertObjectKey(key) {
   }
 }
 
-async function finish(response) {
-  const body = Buffer.from(await response.arrayBuffer());
-  if (!response.ok) {
-    throw new BackupError(`S3 request failed (${response.status}).`);
+function asS3Error(error) {
+  if (error instanceof BackupError) {
+    return error;
   }
-  return body;
+  const status = error?.$metadata?.httpStatusCode;
+  if (typeof status === 'number') {
+    return new BackupError(`S3 request failed (${status}).`);
+  }
+  return new BackupError('S3 request failed.');
+}
+
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK.addAddress('::1', 'ipv6');
+
+function isLoopback(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  if (host.toLowerCase() === 'localhost') {
+    return true;
+  }
+  const family = isIP(host);
+  if (family === 0) {
+    return false;
+  }
+  return LOOPBACK.check(host, family === 4 ? 'ipv4' : 'ipv6');
 }
