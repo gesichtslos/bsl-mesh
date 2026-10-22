@@ -13,7 +13,8 @@ COPY src ./src
 COPY migrations ./migrations
 COPY docs/08-CLIENT-SECURITY-MANIFEST.md ./docs/08-CLIENT-SECURITY-MANIFEST.md
 COPY docker/entrypoint.sh /app/docker/entrypoint.sh
-RUN pnpm build && chmod 755 /app/docker/entrypoint.sh && chown -R node:node /app
+COPY docker/production-migrate.sh /app/docker/production-migrate.sh
+RUN pnpm build && chmod 755 /app/docker/entrypoint.sh /app/docker/production-migrate.sh && chown -R node:node /app
 
 USER node
 

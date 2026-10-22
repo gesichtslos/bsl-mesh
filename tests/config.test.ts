@@ -26,6 +26,8 @@ describe('loadConfig', () => {
       rateLimitPublicPerMinute: 120,
       knowledgeSourceKind: 'synthetic',
       registryDemonstration: false,
+      publicHostname: null,
+      trustProxyHops: 0,
     });
   });
 

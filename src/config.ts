@@ -25,6 +25,8 @@ export type AppConfig = {
   rateLimitPublicPerMinute: number;
   knowledgeSourceKind: 'organic' | 'synthetic' | 'import';
   registryDemonstration: boolean;
+  publicHostname: string | null;
+  trustProxyHops: number;
 };
 
 export class ConfigError extends Error {
@@ -50,6 +52,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitPublicPerMinute: readLimit(env, 'RATE_LIMIT_PUBLIC_PER_MINUTE', 120),
     knowledgeSourceKind: readSourceKind(env, nodeEnv),
     registryDemonstration: env['REGISTRY_DEMONSTRATION']?.trim() === 'enabled',
+    publicHostname: readPublicHostname(env),
+    trustProxyHops: readProxyHops(env),
   };
 }
 
@@ -139,6 +143,32 @@ function readSourceKind(
     return value;
   }
   throw new ConfigError('KNOWLEDGE_SOURCE_KIND must be organic, synthetic, or import.');
+}
+
+function readPublicHostname(env: NodeJS.ProcessEnv): string | null {
+  const value = env['PUBLIC_HOSTNAME']?.trim() ?? '';
+  if (value === '') {
+    return null;
+  }
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(value)) {
+    throw new ConfigError('PUBLIC_HOSTNAME must be a DNS name without a scheme, port, or path.');
+  }
+  return value;
+}
+
+function readProxyHops(env: NodeJS.ProcessEnv): number {
+  const raw = env['TRUST_PROXY_HOPS']?.trim() ?? '';
+  if (raw === '') {
+    return 0;
+  }
+  if (!/^[0-9]+$/.test(raw)) {
+    throw new ConfigError('TRUST_PROXY_HOPS must be an integer from 0 to 2.');
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > 2) {
+    throw new ConfigError('TRUST_PROXY_HOPS must be an integer from 0 to 2.');
+  }
+  return value;
 }
 
 function readOidc(env: NodeJS.ProcessEnv): OidcConfig | null {

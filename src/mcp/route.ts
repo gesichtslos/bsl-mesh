@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createMcpHandler, type AuthInfo } from '@modelcontextprotocol/server';
-import { localhostHostValidation, localhostOriginValidation } from '@modelcontextprotocol/fastify';
+import { localhostHostValidation, localhostOriginValidation, hostHeaderValidation, originValidation } from '@modelcontextprotocol/fastify';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 
 import type { AppConfig } from '../config.js';
@@ -33,8 +33,16 @@ export function registerMcpRoute(
     ...(input.afterCaseCreated !== undefined ? { afterCaseCreated: input.afterCaseCreated } : {}),
   }), { legacy: 'stateless' });
   const nodeHandler = toNodeHandler(handler);
-  const validateHost = localhostHostValidation();
-  const validateOrigin = localhostOriginValidation();
+  const allowedNames = ['localhost', '127.0.0.1', '[::1]'];
+  if (input.config.publicHostname !== null) {
+    allowedNames.push(input.config.publicHostname);
+  }
+  const validateHost = input.config.publicHostname === null
+    ? localhostHostValidation()
+    : hostHeaderValidation(allowedNames);
+  const validateOrigin = input.config.publicHostname === null
+    ? localhostOriginValidation()
+    : originValidation(allowedNames);
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.split('?')[0] !== '/mcp') {
       return;
