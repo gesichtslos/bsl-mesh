@@ -5,6 +5,29 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 pg_name=bslmesh-backup-pg
 s3_name=bslmesh-backup-minio
 port=19090
+s3_code=000
+pg_state=not-checked
+stage=start
+redact() {
+  sed -E \
+    -e 's/ci-disposable-passphrase/[redacted]/g' \
+    -e 's/ci-disposable-secret/[redacted]/g' \
+    -e 's/ci-disposable-access/[redacted]/g' \
+    -e 's/ci-disposable/[redacted]/g' \
+    -e 's/(Authorization:).*/\1 [redacted]/Ig'
+}
+fail() {
+  echo "rehearsal failed at: ${stage}" >&2
+  echo "s3_http=${s3_code} postgres=${pg_state}" >&2
+  echo '--- containers ---' >&2
+  docker ps -a --filter "name=bslmesh-backup" --format '{{.Names}} {{.Status}}' >&2 || true
+  echo '--- s3 log ---' >&2
+  docker logs --tail 40 "${s3_name}" 2>&1 | redact >&2 || true
+  echo '--- postgres log ---' >&2
+  docker logs --tail 40 "${pg_name}" 2>&1 | redact >&2 || true
+  echo "$*" >&2
+  exit 1
+}
 cleanup() {
   docker rm -f "${pg_name}" "${s3_name}" >/dev/null 2>&1 || true
   rm -f /tmp/bslmesh-backup-rehearsal.err
@@ -25,23 +48,39 @@ docker run -d --name "${pg_name}" \
   -e POSTGRES_DB=bslmesh_dev \
   postgres:18.6 >/dev/null
 
-for _ in $(seq 1 40); do
-  s3_ready=0
-  pg_ready=0
+stage=wait-for-containers
+s3_ready=0
+pg_ready=0
+for _ in $(seq 1 120); do
   s3_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" || true)"
+  s3_code="${s3_code//$'\r'/}"
   if [ "${s3_code}" = "403" ]; then
     s3_ready=1
   fi
-  docker exec "${pg_name}" pg_isready -U bslmesh_admin -d bslmesh_dev >/dev/null 2>&1 && pg_ready=1
+  if pg_state="$(docker exec "${pg_name}" pg_isready -U bslmesh_admin -d bslmesh_dev 2>&1)"; then
+    pg_ready=1
+  else
+    pg_ready=0
+  fi
   if [ "${s3_ready}" = 1 ] && [ "${pg_ready}" = 1 ]; then
     break
   fi
   sleep 1
 done
-test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/")" = "403"
-bad_auth="$(curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:${port}/bslmesh-backup-ci" -H 'authorization: AWS4-HMAC-SHA256 Credential=bad/20261022/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=deadbeef')"
-test "${bad_auth}" != "200"
-docker exec "${pg_name}" pg_isready -U bslmesh_admin -d bslmesh_dev >/dev/null
+if [ "${s3_ready}" != 1 ] || [ "${pg_ready}" != 1 ]; then
+  fail "S3 did not return 403 or PostgreSQL did not accept connections within 120s"
+fi
+stage=reject-bad-auth
+bad_auth="$(curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:${port}/bslmesh-backup-ci" -H 'authorization: AWS4-HMAC-SHA256 Credential=bad/20261022/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=deadbeef' || true)"
+bad_auth="${bad_auth//$'\r'/}"
+if [ "${bad_auth}" = "200" ] || [ "${bad_auth}" = "000" ]; then
+  s3_code="${bad_auth}"
+  fail "S3 accepted or did not answer an unauthenticated bucket request"
+fi
+stage=postgres-ready
+if ! pg_state="$(docker exec "${pg_name}" pg_isready -U bslmesh_admin -d bslmesh_dev 2>&1)"; then
+  fail "PostgreSQL stopped accepting connections after the readiness check"
+fi
 
 docker exec -i "${pg_name}" psql -U bslmesh_admin -d bslmesh_dev -v ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE app_meta (
@@ -65,10 +104,14 @@ export BACKUP_S3_SECRET_ACCESS_KEY=ci-disposable-secret
 export BACKUP_PASSPHRASE=ci-disposable-passphrase
 export BACKUP_PG_DOCKER_CONTAINER="${pg_name}"
 
+stage=create-bucket
 node scripts/production-backup.mjs create-bucket
+stage=backup
 uploaded="$(node scripts/production-backup.mjs backup)"
 key="$(printf '%s\n' "${uploaded}" | awk '{print $2}')"
+stage=verify
 node scripts/production-backup.mjs verify "${key}"
+stage=ciphertext
 BACKUP_OBJECT_KEY="${key}" node --input-type=module <<'EOF'
 import { createReadStream } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -106,11 +149,16 @@ try {
 }
 EOF
 
+stage=restore
 node scripts/production-backup.mjs restore "${key}" bslmesh_backup_check
 label="$(docker exec "${pg_name}" psql -U bslmesh_admin -d bslmesh_backup_check -tAc "SELECT label FROM backup_marker WHERE id = 1;")"
 label="$(printf '%s' "${label}" | tr -d '[:space:]')"
-test "${label}" = "synthetic-backup-marker"
+stage=restore-marker
+if [ "${label}" != "synthetic-backup-marker" ]; then
+  fail "restored marker was not the synthetic backup marker"
+fi
 
+stage=large-transfer
 node --expose-gc --input-type=module <<'EOF'
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -178,13 +226,15 @@ if (growth > 80 * 1024 * 1024) {
 }
 EOF
 
+stage=wrong-passphrase
 set +e
 BACKUP_PASSPHRASE=wrong-passphrase-value node scripts/production-backup.mjs verify "${key}" >/tmp/bslmesh-backup-rehearsal.err 2>&1
 status=$?
 set -e
-test "${status}" -ne 0
+if [ "${status}" -eq 0 ]; then
+  fail "a wrong passphrase was accepted"
+fi
 if grep -F -e 'ci-disposable-secret' -e 'ci-disposable-passphrase' -e 'synthetic-backup-marker' /tmp/bslmesh-backup-rehearsal.err >/dev/null; then
-  echo "backup failure text included a secret or plaintext marker" >&2
-  exit 1
+  fail "backup failure text included a secret or plaintext marker"
 fi
 echo "rehearsal-ok"
