@@ -88,6 +88,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.0
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@12.14.0 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
       - name: Build the application image
         run: docker build -t bsl-mesh-app:ci .
       - name: Check the security manifest is in the image and other docs are not
