@@ -2,7 +2,7 @@
 # Reports whether a running container already uses a Docker volume.
 # compose.production.yaml does not call this script and does not lock the volume.
 set -eu
-volume="${1:-bsl-mesh-staging_pgdata}"
+volume="${1:-bsl-mesh-production_pgdata}"
 if [ -n "${VOLUME_USERS_FILE:-}" ]; then
   users="$(cat "${VOLUME_USERS_FILE}")"
 else

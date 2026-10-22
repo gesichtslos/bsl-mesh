@@ -52,8 +52,11 @@ for (const expected of ['80/tcp', '443/tcp', '443/udp']) {
   }
 }
 const volume = compose.volumes?.pgdata;
-if (volume?.external !== true || volume?.name !== 'bsl-mesh-staging_pgdata') {
-  errors.push('PostgreSQL volume is not the existing external staging volume');
+if (volume?.external !== true || volume?.name !== 'bsl-mesh-production_pgdata') {
+  errors.push('PostgreSQL volume must be the external production volume bsl-mesh-production_pgdata');
+}
+if (volume?.name === 'bsl-mesh-staging_pgdata') {
+  errors.push('PostgreSQL volume must not be the staging volume');
 }
 if (appEnv.PUBLIC_HOSTNAME !== 'bslmesh.ru' || appEnv.TRUST_PROXY_HOPS !== '1') {
   errors.push('the application is not configured for bslmesh.ru behind one proxy hop');
@@ -85,6 +88,10 @@ if (JSON.stringify(caddy).includes('"disable":true') && hosts.includes('"disable
 const expectedPassword = process.env.CHECK_POSTGRES_PASSWORD;
 if (expectedPassword !== undefined && dbEnv.POSTGRES_PASSWORD !== expectedPassword) {
   errors.push('Compose interpolated a password other than the disposable check value');
+}
+const composeSource = readFileSync('compose.production.yaml', 'utf8');
+if (composeSource.includes('bsl-mesh-staging_pgdata')) {
+  errors.push('production compose still references the staging database volume');
 }
 const source = readFileSync('Caddyfile.production', 'utf8');
 if (/auto_https\s+off/.test(source) || /tls\s+internal/.test(source)) {

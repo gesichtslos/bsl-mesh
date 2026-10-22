@@ -1,9 +1,9 @@
 # Production Compose. Do not start it until DNS, firewall, and public HTTPS are separately approved.
 # Starting this file publishes 80/tcp, 443/tcp, and 443/udp. It does not publish PostgreSQL or Fastify.
-# The database volume is external so a new project name cannot create an empty database.
-# external: true does not lock the volume. Another PostgreSQL container can mount it at the same time.
-# Stop staging and run scripts/check-production-volume.sh before a later, separately approved start.
-# This file does not call that script.
+# PostgreSQL uses the external volume bsl-mesh-production_pgdata, not the staging volume.
+# Create it before the first start: docker volume create bsl-mesh-production_pgdata
+# Compose does not create this volume and does not copy staging data.
+# scripts/check-production-volume.sh reports whether that volume is already in use. This file does not call it.
 name: bsl-mesh-production
 
 services:
@@ -107,7 +107,7 @@ services:
 
 volumes:
   pgdata:
-    name: bsl-mesh-staging_pgdata
+    name: bsl-mesh-production_pgdata
     external: true
   caddy-data:
   caddy-config:
