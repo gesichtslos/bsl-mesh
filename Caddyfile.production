@@ -3,6 +3,8 @@
 }
 
 bslmesh.ru {
+	@root path /
+	redir @root /start 302
 	encode gzip
 	reverse_proxy app:3000
 }

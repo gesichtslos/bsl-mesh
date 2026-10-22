@@ -22,6 +22,24 @@ function environmentMap(service) {
   return environment;
 }
 
+function collectRoutes(node, routes) {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectRoutes(item, routes);
+    }
+    return;
+  }
+  if (node === null || typeof node !== 'object') {
+    return;
+  }
+  if (Array.isArray(node.routes)) {
+    routes.push(...node.routes);
+  }
+  for (const value of Object.values(node)) {
+    collectRoutes(value, routes);
+  }
+}
+
 function publishedPorts(service) {
   return service?.ports ?? [];
 }
@@ -96,6 +114,26 @@ if (composeSource.includes('bsl-mesh-staging_pgdata')) {
 const source = readFileSync('Caddyfile.production', 'utf8');
 if (/auto_https\s+off/.test(source) || /tls\s+internal/.test(source)) {
   errors.push('production Caddyfile disables public certificates');
+}
+const routes = [];
+collectRoutes(caddy, routes);
+const rootRedirect = routes.some((route) => {
+  const paths = (route.match ?? []).flatMap((match) => match.path ?? []);
+  return paths.length === 1 && paths[0] === '/' && (route.handle ?? []).some((handle) => (
+    handle.handler === 'static_response'
+    && handle.status_code === 302
+    && handle.headers?.Location?.[0] === '/start'
+  ));
+});
+const applicationProxy = routes.some((route) => (route.handle ?? []).some((handle) => (
+  handle.handler === 'reverse_proxy'
+  && (handle.upstreams ?? []).some((upstream) => upstream.dial === 'app:3000')
+)));
+if (!rootRedirect) {
+  errors.push('the site root does not redirect to /start with status 302');
+}
+if (!applicationProxy) {
+  errors.push('Caddy no longer proxies application routes to app:3000');
 }
 
 if (errors.length > 0) {
