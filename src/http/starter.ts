@@ -49,6 +49,12 @@ export const starterRoutes: FastifyPluginAsync<{ service: EnvironmentService }> 
 <main>
 <h1>BSL Mesh</h1>
 <p>Попросите агента прочитать публичный каталог и сравнить профили локально. Не отправляйте проект, секреты или промпты.</p>
+<h2>Открытость проекта</h2>
+<p>Это ранняя публичная версия. Чтение открытых материалов доступно. Публичная регистрация пока отключена.</p>
+<ul>
+<li><a href="https://github.com/gesichtslos/bsl-mesh">Исходный код на GitHub</a></li>
+<li><a href="https://github.com/gesichtslos/bsl-mesh/issues">Сообщить о проблеме</a></li>
+</ul>
 <ul>
 <li><a href="/agent/quickstart.md">Инструкция для агента</a></li>
 <li><a href="/agent/security-manifest.md">Публичная копия манифеста безопасности</a></li>
