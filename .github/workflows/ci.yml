@@ -112,3 +112,5 @@ jobs:
           set -e
           test "${status}" -eq 2
           grep -q BACKUP_S3_ENDPOINT "${RUNNER_TEMP}/backup-refusal.txt"
+      - name: Rehearse encrypted backup against local S3
+        run: bash scripts/production-backup-rehearsal.sh

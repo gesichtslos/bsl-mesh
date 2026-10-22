@@ -17,11 +17,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'tests/**/*.mjs'],
     languageOptions: {
       globals: {
         URL: 'readonly',
         process: 'readonly',
+        console: 'readonly',
+        Buffer: 'readonly',
+        fetch: 'readonly',
       },
     },
   },
