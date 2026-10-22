@@ -36,3 +36,15 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname bslmesh_dev <<'SQL'
 ALTER SCHEMA public OWNER TO bslmesh_app;
 GRANT ALL ON SCHEMA public TO bslmesh_app;
 SQL
+
+if [ -n "${MIGRATE_PASSWORD:-}" ]; then
+  psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+    -v migrate_password="$MIGRATE_PASSWORD" <<'SQL'
+SELECT format(
+  '%s %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD %L',
+  CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bslmesh_migrator') THEN 'ALTER ROLE' ELSE 'CREATE ROLE' END,
+  'bslmesh_migrator',
+  :'migrate_password'
+) \gexec
+SQL
+fi

@@ -92,4 +92,23 @@ jobs:
         run: docker build -t bsl-mesh-app:ci .
       - name: Check the security manifest is in the image and other docs are not
         run: |
-          docker run --rm --user root --entrypoint sh bsl-mesh-app:ci -c 'test -s docs/08-CLIENT-SECURITY-MANIFEST.md && test ! -e docs/00-VISION.md && test ! -e .env && test ! -e backups && test ! -e secrets'
+          docker run --rm --user root --entrypoint sh bsl-mesh-app:ci -c 'test -s docs/08-CLIENT-SECURITY-MANIFEST.md && test ! -e docs/00-VISION.md && test ! -e .env && test ! -e backups && test ! -e secrets && test -s docker/production-migrate.sh'
+      - name: Check production Compose and Caddy without publishing ports
+        run: |
+          umask 077
+          cat > "${RUNNER_TEMP}/production.env" << 'EOF'
+          POSTGRES_PASSWORD=ci-disposable
+          APP_PASSWORD=ci-disposable-app
+          MIGRATE_PASSWORD=ci-disposable-migrator
+          CADDY_ACME_EMAIL=tls-notices@example.test
+          EOF
+          docker compose --env-file "${RUNNER_TEMP}/production.env" -f compose.production.yaml config --format json > "${RUNNER_TEMP}/production-compose.json"
+          docker run --rm -v "$PWD/Caddyfile.production:/etc/caddy/Caddyfile:ro" -e CADDY_ACME_EMAIL=tls-notices@example.test caddy:2.11.7 caddy adapt --config /etc/caddy/Caddyfile --pretty > "${RUNNER_TEMP}/caddy.json"
+          CHECK_POSTGRES_PASSWORD=ci-disposable node scripts/check-production-config.mjs "${RUNNER_TEMP}/production-compose.json" "${RUNNER_TEMP}/caddy.json"
+          bash scripts/production-backup.sh --self-test
+          set +e
+          bash scripts/production-backup.sh > "${RUNNER_TEMP}/backup-refusal.txt" 2>&1
+          status=$?
+          set -e
+          test "${status}" -eq 2
+          grep -q BACKUP_S3_ENDPOINT "${RUNNER_TEMP}/backup-refusal.txt"

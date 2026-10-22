@@ -48,9 +48,13 @@ export type BuildAppOptions = {
 };
 
 export async function buildApp(config: AppConfig, options: BuildAppOptions = {}): Promise<FastifyInstance> {
+  const trustProxy = config.trustProxyHops === 0
+    ? false
+    : (_address: string, hop: number) => hop < config.trustProxyHops;
   const shared = {
     genReqId: () => randomUUID(),
     bodyLimit: 64 * 1024,
+    trustProxy,
     ajv: {
       customOptions: {
         removeAdditional: false,

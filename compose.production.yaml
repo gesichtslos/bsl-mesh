@@ -1,0 +1,113 @@
+# Production Compose. Do not start it until DNS, firewall, and public HTTPS are separately approved.
+# Starting this file publishes 80/tcp, 443/tcp, and 443/udp. It does not publish PostgreSQL or Fastify.
+# PostgreSQL uses the external volume bsl-mesh-production_pgdata, not the staging volume.
+# Create it before the first start: docker volume create bsl-mesh-production_pgdata
+# Compose does not create this volume and does not copy staging data.
+# scripts/check-production-volume.sh reports whether that volume is already in use. This file does not call it.
+name: bsl-mesh-production
+
+services:
+  db:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bslmesh_dev
+      POSTGRES_USER: bslmesh_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the untracked server env file}
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in the untracked server env file}
+      MIGRATE_PASSWORD: ${MIGRATE_PASSWORD:?Set MIGRATE_PASSWORD in the untracked server env file}
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bslmesh_admin -d bslmesh_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: ${APP_IMAGE:-bsl-mesh-app:0.1.0}
+    build:
+      context: .
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: 127.0.0.1
+      PORT: "3000"
+      NODE_ENV: production
+      LOG_LEVEL: info
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: bslmesh_dev
+      PGUSER: bslmesh_admin
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the untracked server env file}
+      MIGRATE_PASSWORD: ${MIGRATE_PASSWORD:?Set MIGRATE_PASSWORD in the untracked server env file}
+      AUTH_PUBLIC_REGISTRATION: "false"
+      AUTH_TEST_ADAPTER: disabled
+    entrypoint: ["/app/docker/production-migrate.sh"]
+
+  app:
+    image: ${APP_IMAGE:-bsl-mesh-app:0.1.0}
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      NODE_ENV: production
+      LOG_LEVEL: info
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: bslmesh_dev
+      PGUSER: bslmesh_app
+      PGPASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in the untracked server env file}
+      PUBLIC_HOSTNAME: bslmesh.ru
+      TRUST_PROXY_HOPS: "1"
+      AUTH_PUBLIC_REGISTRATION: "false"
+      AUTH_TEST_ADAPTER: disabled
+    entrypoint: ["node", "dist/server.js"]
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  caddy:
+    image: caddy:2.11.7
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?Set the mailbox that will receive certificate notices}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  pgdata:
+    name: bsl-mesh-production_pgdata
+    external: true
+  caddy-data:
+  caddy-config:
