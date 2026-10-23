@@ -1,7 +1,7 @@
 import { IDENTITY_DETAIL, IdentityError } from './errors.js';
 
-export const READ_SCOPES = ['profile:read', 'knowledge:read', 'meetups:read', 'tools:read', 'handoff:read'] as const;
-export const WRITE_SCOPES = ['cases:write', 'evidence:write', 'meetups:write', 'telemetry:write', 'handoff:write'] as const;
+export const READ_SCOPES = ['profile:read', 'knowledge:read', 'meetups:read', 'tools:read', 'handoff:read', 'workspaces:read'] as const;
+export const WRITE_SCOPES = ['cases:write', 'evidence:write', 'meetups:write', 'telemetry:write', 'handoff:write', 'workspaces:write'] as const;
 export const ALL_SCOPES = [...READ_SCOPES, ...WRITE_SCOPES] as const;
 
 export type ReadScope = (typeof READ_SCOPES)[number];

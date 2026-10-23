@@ -6,6 +6,7 @@ import { IDENTITY_DETAIL, IdentityError } from '../identity/errors.js';
 import { uuidV7 } from '../identity/ids.js';
 import type { AgentPrincipal, IdentityService } from '../identity/service.js';
 import { hashRequest, sameDigest } from '../identity/tokens.js';
+import { assertWorkspaceRead, assertWorkspaceSend, WORKSPACE_TASK_FILTER } from '../workspaces/access.js';
 import {
   HANDOFF_EXTENSION,
   type EscalationReason,
@@ -209,6 +210,7 @@ export class HandoffService {
     const principal = await this.reader(input.accessToken, input.requestId);
     return this.transaction(async (client) => {
       const task = await this.visibleTask(client, input.taskId, principal.agentId, true);
+      await assertWorkspaceRead(client, task.context_id, principal.agentId);
       if (task.recipient_agent_id === principal.agentId && task.metadata['receivedAt'] === undefined) {
         const receivedAt = this.now().toISOString();
         await client.query(
@@ -236,8 +238,17 @@ export class HandoffService {
       `SELECT id, context_id, requester_agent_id, requester_owner_id, recipient_agent_id, recipient_owner_id,
               state, status_timestamp, metadata, source_kind, created_at, updated_at
        FROM handoff_tasks
-       WHERE (requester_agent_id = $1 OR recipient_agent_id = $1)
+       WHERE (
+         requester_agent_id = $1 OR recipient_agent_id = $1
+         OR EXISTS (
+           SELECT 1 FROM workspace_members
+           WHERE workspace_id = handoff_tasks.context_id
+             AND agent_id = $1
+             AND status = 'active'
+         )
+       )
          AND ($2::uuid IS NULL OR context_id = $2)
+         ${WORKSPACE_TASK_FILTER}
        ORDER BY updated_at DESC, id DESC
        LIMIT $3`,
       [principal.agentId, input.contextId ?? null, input.pageSize],
@@ -264,6 +275,7 @@ export class HandoffService {
         return { statusCode: 200, body: replay };
       }
       const task = await this.visibleTask(client, input.taskId, principal.agentId, true);
+      await assertWorkspaceRead(client, task.context_id, principal.agentId);
       if (task.requester_agent_id !== principal.agentId || TERMINAL.has(task.state)) {
         throw new IdentityError(400, 'Bad Request', 'UnsupportedOperationError');
       }
@@ -293,14 +305,24 @@ export class HandoffService {
       throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
     }
     const recipientId = draft.directive.recipientAgentId;
-    const allowed = await client.query<{ owner_id: string; availability: 'accepting' | 'paused' }>(
-      `SELECT allowance.recipient_owner_id AS owner_id, profile.availability
-       FROM handoff_allowances AS allowance
-       JOIN agents AS recipient ON recipient.id = allowance.recipient_agent_id AND recipient.status = 'active'
-       JOIN handoff_profiles AS profile ON profile.agent_id = recipient.id
-       WHERE allowance.sender_agent_id = $1 AND allowance.recipient_agent_id = $2`,
-      [principal.agentId, recipientId],
-    );
+    const workspaceBound = draft.message.contextId !== undefined
+      && await assertWorkspaceSend(client, draft.message.contextId, principal.agentId, recipientId);
+    const allowed = workspaceBound
+      ? await client.query<{ owner_id: string; availability: 'accepting' | 'paused' }>(
+        `SELECT recipient.owner_id, profile.availability
+         FROM agents AS recipient
+         JOIN handoff_profiles AS profile ON profile.agent_id = recipient.id
+         WHERE recipient.id = $1 AND recipient.status = 'active'`,
+        [recipientId],
+      )
+      : await client.query<{ owner_id: string; availability: 'accepting' | 'paused' }>(
+        `SELECT allowance.recipient_owner_id AS owner_id, profile.availability
+         FROM handoff_allowances AS allowance
+         JOIN agents AS recipient ON recipient.id = allowance.recipient_agent_id AND recipient.status = 'active'
+         JOIN handoff_profiles AS profile ON profile.agent_id = recipient.id
+         WHERE allowance.sender_agent_id = $1 AND allowance.recipient_agent_id = $2`,
+        [principal.agentId, recipientId],
+      );
     const recipient = allowed.rows[0];
     if (recipient === undefined) {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
@@ -345,6 +367,10 @@ export class HandoffService {
       throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
     }
     const task = await this.visibleTask(client, taskId, principal.agentId, true);
+    await assertWorkspaceRead(client, task.context_id, principal.agentId);
+    if (principal.agentId === task.recipient_agent_id && draft.directive.state !== undefined) {
+      await assertWorkspaceSend(client, task.context_id, principal.agentId, task.requester_agent_id);
+    }
     if (draft.message.contextId !== undefined && draft.message.contextId !== task.context_id) {
       throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
     }
@@ -437,7 +463,15 @@ export class HandoffService {
       `SELECT id, context_id, requester_agent_id, requester_owner_id, recipient_agent_id, recipient_owner_id,
               state, status_timestamp, metadata, source_kind, created_at, updated_at
        FROM handoff_tasks
-       WHERE id = $1 AND (requester_agent_id = $2 OR recipient_agent_id = $2)
+       WHERE id = $1 AND (
+         requester_agent_id = $2 OR recipient_agent_id = $2
+         OR EXISTS (
+           SELECT 1 FROM workspace_members
+           WHERE workspace_id = handoff_tasks.context_id
+             AND agent_id = $2
+             AND status = 'active'
+         )
+       )
        ${lock ? 'FOR UPDATE' : ''}`,
       [taskId, agentId],
     );

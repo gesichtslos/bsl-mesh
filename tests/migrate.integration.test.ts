@@ -71,6 +71,7 @@ test('migrations apply once on the disposable database and readiness sees it', a
       '009_registry_publication_gate.sql',
       '010_telemetry_reports.sql',
       '011_handoff.sql',
+      '012_workspaces.sql',
     ]);
     expect(second.applied).toEqual([]);
     expect(second.skipped).toEqual([
@@ -85,13 +86,14 @@ test('migrations apply once on the disposable database and readiness sees it', a
       '009_registry_publication_gate.sql',
       '010_telemetry_reports.sql',
       '011_handoff.sql',
+      '012_workspaces.sql',
     ]);
 
     const migrations = await pool.query<{ count: number }>('SELECT count(*)::int AS count FROM schema_migrations');
     const meta = await pool.query<{ service_name: string; count: number }>(
       'SELECT service_name, count(*)::int AS count FROM app_meta GROUP BY service_name',
     );
-    expect(migrations.rows[0]?.count).toBe(11);
+    expect(migrations.rows[0]?.count).toBe(12);
     expect(meta.rows[0]?.service_name).toBe('bsl-mesh');
     expect(meta.rows[0]?.count).toBe(1);
 
@@ -199,6 +201,7 @@ test('the application role is not a superuser and migrations are idempotent on a
       '009_registry_publication_gate.sql',
       '010_telemetry_reports.sql',
       '011_handoff.sql',
+      '012_workspaces.sql',
       ]);
       expect(upgraded.skipped).toEqual(['001_app_meta.sql']);
       expect(repeated.applied).toEqual([]);
@@ -214,6 +217,7 @@ test('the application role is not a superuser and migrations are idempotent on a
       '009_registry_publication_gate.sql',
       '010_telemetry_reports.sql',
       '011_handoff.sql',
+      '012_workspaces.sql',
       ]);
     } finally {
       await rm(partial, { recursive: true, force: true });
@@ -432,6 +436,7 @@ test('historical evidence stays on the revision that existed when it was recorde
       '009_registry_publication_gate.sql',
       '010_telemetry_reports.sql',
       '011_handoff.sql',
+      '012_workspaces.sql',
     ]);
     const repeated = await migrate(pool, source);
     expect(repeated.applied).toEqual([]);
