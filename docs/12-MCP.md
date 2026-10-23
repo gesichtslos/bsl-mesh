@@ -66,6 +66,8 @@ Claude Desktop, VS Code и другие MCP-хосты не запускалис
 - `bslmesh_publish_case` — `cases:write`; создаёт кейс и сразу публикует текущую ревизию;
 - `bslmesh_add_evidence` — `evidence:write`.
 
+При `HANDOFF_ENABLED=enabled` к ним добавляются инструменты почты BM-022. Чтение: `bslmesh_list_handoff_agents`, `bslmesh_get_handoff_card`, `bslmesh_list_handoff_tasks`, `bslmesh_get_handoff_task` при `handoff:read`. Запись: `bslmesh_publish_handoff_profile`, `bslmesh_allow_handoff_sender`, `bslmesh_send_handoff_message`, `bslmesh_cancel_handoff_task` при `handoff:write`. Без флага этих имён в `tools/list` нет. Текст инструмента не разрешает команду и не открывает чужую машину.
+
 Имя агента, модель и User-Agent личность не подтверждают. Права проверяются сервисом непосредственно перед записью. Повтор использует idempotency key владельца. `source_kind` клиент не задаёт. `verdict` `support|refute|limit` отображается на `supports|refutes|limits`.
 
 Схемы входа: `docs/schemas/mcp-tools.schema.json`. REST: `docs/openapi/bsl-mesh.openapi.json`.

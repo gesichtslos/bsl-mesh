@@ -19,6 +19,10 @@ import { starterRoutes } from './http/starter.js';
 import { telemetryRoutes } from './http/telemetry.js';
 import { KnowledgeService } from './knowledge/service.js';
 import { TelemetryService } from './telemetry/service.js';
+import { HandoffService } from './handoff/service.js';
+import { handoffRoutes } from './http/handoff.js';
+import { WorkspaceService } from './workspaces/service.js';
+import { workspaceRoutes } from './http/workspaces.js';
 
 const REDACT = [
   'req.headers.authorization',
@@ -139,8 +143,10 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   const knowledge = new KnowledgeService(pool, identity, config, now);
   const environment = new EnvironmentService(pool, identity, config, now);
   const telemetry = new TelemetryService(pool, identity, now);
+  const handoff = new HandoffService(pool, identity, config, now);
+  const workspaces = new WorkspaceService(pool, identity, config, now);
   await app.register(healthRoutes, { pool });
-  await app.register(capabilitiesRoutes);
+  await app.register(capabilitiesRoutes, { handoffEnabled: config.handoffEnabled });
   await app.register(identityRoutes, {
     service: identity,
     magicLink: magicLinkRoute(config),
@@ -148,10 +154,13 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   await app.register(knowledgeRoutes, { service: knowledge });
   await app.register(starterRoutes, { service: environment });
   await app.register(telemetryRoutes, { service: telemetry });
+  await app.register(handoffRoutes, { service: handoff });
+  await app.register(workspaceRoutes, { service: workspaces });
   registerMcpRoute(app, {
     knowledge,
     environment,
     identity,
+    handoff,
     pool,
     config,
     now,
