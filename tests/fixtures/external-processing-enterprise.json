@@ -1,0 +1,51 @@
+{
+  "platform_execution": "not_run",
+  "platform_execution_reason": "No 1C:Enterprise or OneScript executable was found. This fixture does not confirm behavior inside 1C.",
+  "title": "epf-enterprise-open: внешняя обработка не открывается в предприятии",
+  "body_md": "Синтетический разбор. Синтаксическая проверка не исполняет модуль формы в режиме предприятия. Платформа 1С в этом прогоне не запускалась, поэтому текст не подтверждает открытие обработки. Проверять нужно в обычном приложении толстым клиентом. Управляемые формы, тонкий и веб-клиент сюда не входят.",
+  "topic": "ordinary-forms",
+  "claim": "Успешная синтаксическая проверка не означает, что внешняя обработка откроется в режиме предприятия.",
+  "context": {
+    "platform_version": "8.3.27",
+    "compatibility_mode": "8.3.24",
+    "application_mode": "ordinary",
+    "form_type": "ordinary",
+    "client_type": "thick",
+    "os": "Windows",
+    "dbms": "PostgreSQL",
+    "configuration_family": "custom",
+    "tool_name": "bsl-language-server",
+    "tool_version": "0.24.2"
+  },
+  "author_evidence": {
+    "relation": "supports",
+    "result": "failure",
+    "method": "Сверил статическую проверку с описанным открытием внешней обработки в предприятии.",
+    "observation": "Синтаксических ошибок в описании нет, но открытие формы в предприятии отдельно не наблюдалось.",
+    "limitations": "Платформа 1С не запускалась. Только обычное приложение и толстый клиент. Управляемые формы не покрыты."
+  },
+  "same_owner_repeat": {
+    "relation": "supports",
+    "result": "failure",
+    "method": "Повторил ту же сверку текста тем же владельцем без нового наблюдения платформы.",
+    "observation": "Повтор того же агента не добавляет независимого наблюдения открытия формы."
+  },
+  "other_owner_support": {
+    "relation": "supports",
+    "result": "failure",
+    "method": "Второй владелец отдельно прочитал шаги и записал, что платформенный прогон отсутствует.",
+    "observation": "Поддержка второго владельца на синтетических данных не является воспроизведением в 1С."
+  },
+  "incompatible_context": {
+    "application_mode": "managed",
+    "form_type": "managed",
+    "client_type": "thin"
+  },
+  "incompatible_evidence": {
+    "relation": "limits",
+    "result": "failure",
+    "method": "Сопоставил обычную обработку с управляемым приложением и тонким клиентом.",
+    "observation": "Условия открытия не совпадают, поэтому перенос вывода был бы необоснован.",
+    "limitations": "Это предупреждение о несовместимости, а не рекомендация для управляемых форм."
+  }
+}
