@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -110,6 +112,73 @@ test('the public catalog is only the self-checked read profile and is not a BSL 
   expect(hidden.status).toBe(404);
   expect(hiddenTool.status).toBe(404);
   expect(await fetch(`${base}/agent/quickstart.md`).then((response) => response.text())).toContain('наиболее эффективное окружение определить нельзя');
+  const published = body.profiles[0] as { alternatives?: Array<{ id: string; availability: string }> };
+  expect(published?.alternatives?.map((item) => item.availability)).toEqual(['not_published', 'not_published', 'not_published']);
+  expect(JSON.stringify(body)).not.toContain('/api/v1/starter-profiles/bsl-ordinary-forms');
+});
+
+test('a newcomer follows the published reading path and the catalog digest', async () => {
+  const start = await fetch(`${base}/start`);
+  expect(start.status).toBe(200);
+  const html = await start.text();
+  expect(html).not.toContain('<script');
+  expect(html).toContain('https://bslmesh.ru/mcp');
+  expect(html).toContain('https://bslmesh.ru/api/v1/capabilities');
+  expect(html).toContain('https://bslmesh.ru/api/v1/search');
+  expect(html).toContain('https://github.com/gesichtslos/bsl-mesh');
+  expect(html).not.toContain('bsl-ordinary-forms');
+
+  const quickstart = await fetch(`${base}/agent/quickstart.md`);
+  expect(quickstart.status).toBe(200);
+  const markdown = await quickstart.text();
+  expect(markdown).toContain('https://bslmesh.ru/mcp');
+  expect(markdown).toContain('GET /api/v1/search');
+  expect(markdown).toContain('https://bslmesh.ru/agent/starter-catalog.json');
+  expect(markdown).toContain('not_published');
+
+  const capabilities = await fetch(`${base}/api/v1/capabilities`);
+  expect(capabilities.status).toBe(200);
+  const features = await capabilities.json() as { features: string[]; mcp: { endpoint: string } };
+  expect(features.mcp.endpoint).toBe('/mcp');
+  expect(features.features).toEqual(['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry']);
+
+  const catalog = await fetch(`${base}/agent/starter-catalog.json`);
+  expect(catalog.status).toBe(200);
+  const body = await catalog.json() as Record<string, unknown> & { content_sha256: string; catalog_version: string };
+  const { catalog_version: version, content_sha256: hash, ...canonical } = body;
+  const digest = createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
+  expect(digest).toBe(hash);
+  expect(version).toBe(hash);
+  expect(hash).toMatch(/^[a-f0-9]{64}$/);
+
+  const search = await fetch(`${base}/api/v1/search`);
+  expect(search.status).toBe(200);
+  const page = await search.json() as { items: unknown };
+  expect(Array.isArray(page.items)).toBe(true);
+
+  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+  const initialized = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'newcomer', version: '0' } },
+    }),
+  });
+  expect(initialized.status).toBe(200);
+  expect(await initialized.text()).toContain('"protocolVersion":"2025-11-25"');
+  const tools = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: { ...headers, 'mcp-protocol-version': '2025-11-25' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+  });
+  expect(tools.status).toBe(200);
+  const listed = await tools.text();
+  expect(listed).toContain('bslmesh_search_knowledge');
+  expect(listed).toContain('bslmesh_get_catalog_snapshot');
+  expect(listed).not.toContain('bslmesh_publish_case');
 });
 
 test('anonymous REST and MCP hide non-public versions and keep withdrawn history', async () => {

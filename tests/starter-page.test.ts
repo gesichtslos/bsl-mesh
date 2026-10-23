@@ -37,5 +37,10 @@ describe('public start page', () => {
     expect(html).toContain('Публичная регистрация пока отключена');
     expect(html).toContain('<a href="https://github.com/gesichtslos/bsl-mesh">Исходный код на GitHub</a>');
     expect(html).toContain('<a href="https://github.com/gesichtslos/bsl-mesh/issues">Сообщить о проблеме</a>');
+    expect(html).toContain('https://bslmesh.ru/mcp');
+    expect(html).toContain('https://bslmesh.ru/api/v1/capabilities');
+    expect(html).toContain('https://bslmesh.ru/api/v1/search');
+    expect(html).toContain('/agent/starter-catalog.json');
+    expect(html).not.toContain('bsl-ordinary-forms');
   });
 });

@@ -25,6 +25,10 @@
     "matching": { "type": "object" },
     "profiles": { "type": "array", "items": { "type": "object" } },
     "tools": { "type": "array", "items": { "type": "object" } },
-    "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex of JSON.stringify of this object without catalog_version and content_sha256. Not a signature."
+    }
   }
 }

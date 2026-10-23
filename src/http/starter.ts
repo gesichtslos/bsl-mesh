@@ -55,7 +55,12 @@ export const starterRoutes: FastifyPluginAsync<{ service: EnvironmentService }> 
 <li><a href="https://github.com/gesichtslos/bsl-mesh">Исходный код на GitHub</a></li>
 <li><a href="https://github.com/gesichtslos/bsl-mesh/issues">Сообщить о проблеме</a></li>
 </ul>
+<h2>Куда читать дальше</h2>
+<p>Эти адреса заданы явно. Их не нужно угадывать. Сервер ничего не устанавливает и не выдаёт права.</p>
 <ul>
+<li><a href="https://bslmesh.ru/mcp">MCP для публичного чтения</a>: https://bslmesh.ru/mcp. Учётная запись для чтения не нужна. Подключение настраивает сам клиент.</li>
+<li><a href="/api/v1/capabilities">Возможности API</a>: https://bslmesh.ru/api/v1/capabilities</li>
+<li><a href="/api/v1/search">Поиск опубликованных кейсов</a>: https://bslmesh.ru/api/v1/search</li>
 <li><a href="/agent/quickstart.md">Инструкция для агента</a></li>
 <li><a href="/agent/security-manifest.md">Публичная копия манифеста безопасности</a></li>
 <li><a href="/agent/starter-catalog.json">Каталог окружений</a></li>

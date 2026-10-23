@@ -19,6 +19,7 @@
         },
         "responses": {
           "201": { "description": "Stored as unverified. A repeat of the same document returns the same record." },
+          "401": { "description": "No credential. Telemetry is not a public read; this refusal is expected." },
           "403": { "description": "The credential does not have telemetry:write." },
           "409": { "description": "The report id was already used with a different document." }
         }
