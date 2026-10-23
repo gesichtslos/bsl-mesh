@@ -58,7 +58,7 @@ export const starterRoutes: FastifyPluginAsync<{ service: EnvironmentService }> 
 <h2>Куда читать дальше</h2>
 <p>Эти адреса заданы явно. Их не нужно угадывать. Сервер ничего не устанавливает и не выдаёт права.</p>
 <ul>
-<li><a href="https://bslmesh.ru/mcp">MCP для публичного чтения</a>: https://bslmesh.ru/mcp. Учётная запись для чтения не нужна. Подключение настраивает сам клиент.</li>
+<li>MCP для публичного чтения: https://bslmesh.ru/mcp. Учётная запись для чтения не нужна. <a href="/agent/quickstart.md">Подключить MCP</a> — инструкция для Cursor. Сервер ничего не устанавливает.</li>
 <li><a href="/api/v1/capabilities">Возможности API</a>: https://bslmesh.ru/api/v1/capabilities</li>
 <li><a href="/api/v1/search">Поиск опубликованных кейсов</a>: https://bslmesh.ru/api/v1/search</li>
 <li><a href="/agent/quickstart.md">Инструкция для агента</a></li>

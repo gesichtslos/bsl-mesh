@@ -112,9 +112,69 @@ test('the public catalog is only the self-checked read profile and is not a BSL 
   expect(hidden.status).toBe(404);
   expect(hiddenTool.status).toBe(404);
   expect(await fetch(`${base}/agent/quickstart.md`).then((response) => response.text())).toContain('наиболее эффективное окружение определить нельзя');
-  const published = body.profiles[0] as { alternatives?: Array<{ id: string; availability: string }> };
-  expect(published?.alternatives?.map((item) => item.availability)).toEqual(['not_published', 'not_published', 'not_published']);
-  expect(JSON.stringify(body)).not.toContain('/api/v1/starter-profiles/bsl-ordinary-forms');
+  const published = body.profiles[0] as { alternatives?: string[]; unavailable_alternative_count?: number };
+  expect(published?.alternatives).toEqual([]);
+  expect(published?.unavailable_alternative_count).toBe(3);
+  expect(JSON.stringify(body)).not.toContain('bsl-ordinary-forms');
+});
+
+test('public alternatives stay strings and omit unavailable names', async () => {
+  await pool.query(
+    `INSERT INTO environment_profiles (id, created_at) VALUES ('alt-visible', '2026-10-21T00:00:00Z')`,
+  );
+  await pool.query(
+    `INSERT INTO profile_versions (
+       profile_id, version, status, source_kind, summary, tasks, hosts, applicability, incompatibilities,
+       components, verification_steps, rollback_steps, source_uris, limitations, alternatives,
+       evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+       last_reviewed_at, review_due_at, created_at, presentation
+     )
+     SELECT 'alt-visible', '0.1.0', 'published', 'organic', summary, tasks, hosts, applicability, incompatibilities,
+            components, verification_steps, rollback_steps, source_uris, limitations,
+            '["bsl-mesh-public-read","missing-name","not-a-profile"]'::jsonb,
+            evidence_quality, recommendation_level, conflicts_of_interest, independent_owner_confirmations,
+            last_reviewed_at, review_due_at, created_at, 'catalog'
+     FROM profile_versions
+     WHERE profile_id = 'bsl-mesh-public-read' AND version = '0.1.0'`,
+  );
+  const catalog = await fetch(`${base}/agent/starter-catalog.json`);
+  const body = await catalog.json() as {
+    profiles: Array<{ id: string; alternatives: string[]; unavailable_alternative_count?: number }>;
+    content_sha256: string;
+    catalog_version: string;
+  };
+  const visible = body.profiles.find((profile) => profile.id === 'alt-visible');
+  const readOnly = body.profiles.find((profile) => profile.id === 'bsl-mesh-public-read');
+  expect(visible?.alternatives).toEqual(['bsl-mesh-public-read']);
+  expect(visible?.unavailable_alternative_count).toBe(2);
+  expect(readOnly?.alternatives).toEqual([]);
+  expect(JSON.stringify(body)).not.toContain('missing-name');
+  expect(JSON.stringify(body)).not.toContain('not-a-profile');
+  const rest = await fetch(`${base}/api/v1/starter-profiles/alt-visible/versions/0.1.0`);
+  const restBody = await rest.json() as { alternatives: string[]; unavailable_alternative_count?: number };
+  expect(rest.status).toBe(200);
+  expect(restBody.alternatives).toEqual(['bsl-mesh-public-read']);
+  expect(restBody.unavailable_alternative_count).toBe(2);
+  const client = new Client(
+    { name: 'bslmesh-alternatives', version: '0.1.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  try {
+    const text = await toolText(client, 'bslmesh_get_starter_profile', {
+      profile_id: 'alt-visible',
+      version: '0.1.0',
+    });
+    const mcpBody = JSON.parse(text) as { alternatives: string[]; unavailable_alternative_count?: number };
+    expect(mcpBody.alternatives).toEqual(['bsl-mesh-public-read']);
+    expect(mcpBody.unavailable_alternative_count).toBe(2);
+    expect(text).not.toContain('missing-name');
+  } finally {
+    await client.close();
+  }
+  const { catalog_version: version, content_sha256: hash, ...canonical } = body;
+  expect(createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex')).toBe(hash);
+  expect(version).toBe(hash);
 });
 
 test('a newcomer follows the published reading path and the catalog digest', async () => {
@@ -134,7 +194,7 @@ test('a newcomer follows the published reading path and the catalog digest', asy
   expect(markdown).toContain('https://bslmesh.ru/mcp');
   expect(markdown).toContain('GET /api/v1/search');
   expect(markdown).toContain('https://bslmesh.ru/agent/starter-catalog.json');
-  expect(markdown).toContain('not_published');
+  expect(markdown).toContain('unavailable_alternative_count');
 
   const capabilities = await fetch(`${base}/api/v1/capabilities`);
   expect(capabilities.status).toBe(200);

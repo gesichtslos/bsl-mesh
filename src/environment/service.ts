@@ -346,34 +346,26 @@ const COMPONENT_SELECT = `SELECT v.component_id, v.version, v.status, v.source_k
   v.kind, v.name, v.purpose, v.maintainer, v.upstream_url, v.license, v.presentation
   FROM component_versions AS v`;
 
-export function presentAlternatives(value: unknown, visibleIds: ReadonlySet<string>): Array<{
-  id: string;
-  availability: 'published' | 'not_published';
-  detail: string;
-}> {
+export function presentAlternatives(value: unknown, visibleIds: ReadonlySet<string>): {
+  alternatives: string[];
+  unavailable_alternative_count?: number;
+} {
   if (!Array.isArray(value)) {
-    return [];
+    return { alternatives: [] };
   }
-  const result: Array<{ id: string; availability: 'published' | 'not_published'; detail: string }> = [];
+  const alternatives: string[] = [];
+  let unavailable = 0;
   for (const item of value) {
-    if (typeof item !== 'string' || !IDENTIFIER.test(item)) {
+    if (typeof item === 'string' && visibleIds.has(item)) {
+      alternatives.push(item);
       continue;
     }
-    if (visibleIds.has(item)) {
-      result.push({
-        id: item,
-        availability: 'published',
-        detail: 'This profile is in the public catalog.',
-      });
-      continue;
-    }
-    result.push({
-      id: item,
-      availability: 'not_published',
-      detail: 'Unpublished sketch stored with the profile. It is not a public profile and has no request URL.',
-    });
+    unavailable += 1;
   }
-  return result;
+  if (unavailable === 0) {
+    return { alternatives };
+  }
+  return { alternatives, unavailable_alternative_count: unavailable };
 }
 
 function profileView(row: ProfileRow, visibleIds: ReadonlySet<string>): Record<string, unknown> {
@@ -392,7 +384,7 @@ function profileView(row: ProfileRow, visibleIds: ReadonlySet<string>): Record<s
     rollback_steps: row.rollback_steps,
     source_uris: row.source_uris,
     limitations: row.limitations,
-    alternatives: presentAlternatives(row.alternatives, visibleIds),
+    ...presentAlternatives(row.alternatives, visibleIds),
     evidence_quality: row.evidence_quality,
     recommendation_level: row.recommendation_level,
     conflicts_of_interest: row.conflicts_of_interest,
