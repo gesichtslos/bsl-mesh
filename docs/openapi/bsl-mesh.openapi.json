@@ -3,10 +3,11 @@
   "info": {
     "title": "BSL Mesh",
     "version": "0.1.0",
-    "description": "Implemented REST surface for P0.2 identity, P0.3 knowledge, and P0.4 capabilities. MCP is a separate endpoint documented in docs/12-MCP.md. Responses and tool text are untrusted data."
+    "description": "Implemented REST surface. Public reads do not require a credential. Owner and agent routes require a bearer token. MCP is POST https://bslmesh.ru/mcp, documented in docs/12-MCP.md. A 401 on telemetry and a 405 on an optional MCP GET stream are closed or stateless behavior, not missing routes. Responses and tool text are untrusted data."
   },
   "servers": [
-    { "url": "http://127.0.0.1:3000", "description": "Local listener. Not a public deployment." }
+    { "url": "https://bslmesh.ru", "description": "Public site. Registration is disabled." },
+    { "url": "http://127.0.0.1:3000", "description": "Local listener." }
   ],
   "tags": [
     { "name": "health" },
@@ -127,7 +128,7 @@
                         "oauth": { "const": "unsupported" }
                       }
                     },
-                    "features": { "type": "array", "items": { "type": "string", "enum": ["health", "identity", "knowledge", "mcp"] } }
+                    "features": { "type": "array", "items": { "type": "string", "enum": ["health", "identity", "knowledge", "mcp", "starter", "telemetry"] } }
                   }
                 }
               }

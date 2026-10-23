@@ -90,7 +90,8 @@ export class EnvironmentService {
        LIMIT $1`,
       [limit],
     );
-    return { items: result.rows.map(profileView), next_cursor: null };
+    const visible = await this.publicProfileIds();
+    return { items: result.rows.map((row) => profileView(row, visible)), next_cursor: null };
   }
 
   async getProfile(input: {
@@ -110,7 +111,8 @@ export class EnvironmentService {
       throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
     }
     const events = await this.events('profile', row.profile_id, row.version);
-    return { ...profileView(row), events, local_match: 'Use the catalog matching rules locally. Do not upload the workspace.' };
+    const visible = await this.publicProfileIds();
+    return { ...profileView(row, visible), events, local_match: 'Use the catalog matching rules locally. Do not upload the workspace.' };
   }
 
   async getComponentVersion(input: {
@@ -269,6 +271,13 @@ export class EnvironmentService {
     return this.config.registryDemonstration && presentation === 'demonstration';
   }
 
+  private async publicProfileIds(): Promise<Set<string>> {
+    const result = await this.pool.query<{ profile_id: string }>(
+      `SELECT profile_id FROM profile_versions WHERE ${this.publicSql('')}`,
+    );
+    return new Set(result.rows.map((row) => row.profile_id));
+  }
+
   private publicSql(alias: string): string {
     const prefix = alias === '' ? '' : `${alias}.`;
     const presentation = this.config.registryDemonstration
@@ -337,7 +346,29 @@ const COMPONENT_SELECT = `SELECT v.component_id, v.version, v.status, v.source_k
   v.kind, v.name, v.purpose, v.maintainer, v.upstream_url, v.license, v.presentation
   FROM component_versions AS v`;
 
-function profileView(row: ProfileRow): Record<string, unknown> {
+export function presentAlternatives(value: unknown, visibleIds: ReadonlySet<string>): {
+  alternatives: string[];
+  unavailable_alternative_count?: number;
+} {
+  if (!Array.isArray(value)) {
+    return { alternatives: [] };
+  }
+  const alternatives: string[] = [];
+  let unavailable = 0;
+  for (const item of value) {
+    if (typeof item === 'string' && visibleIds.has(item)) {
+      alternatives.push(item);
+      continue;
+    }
+    unavailable += 1;
+  }
+  if (unavailable === 0) {
+    return { alternatives };
+  }
+  return { alternatives, unavailable_alternative_count: unavailable };
+}
+
+function profileView(row: ProfileRow, visibleIds: ReadonlySet<string>): Record<string, unknown> {
   return {
     id: row.profile_id,
     version: row.version,
@@ -353,7 +384,7 @@ function profileView(row: ProfileRow): Record<string, unknown> {
     rollback_steps: row.rollback_steps,
     source_uris: row.source_uris,
     limitations: row.limitations,
-    alternatives: row.alternatives,
+    ...presentAlternatives(row.alternatives, visibleIds),
     evidence_quality: row.evidence_quality,
     recommendation_level: row.recommendation_level,
     conflicts_of_interest: row.conflicts_of_interest,
@@ -404,6 +435,7 @@ export function catalogDocument(
   components: readonly ComponentRow[],
   now: Date,
 ): Record<string, unknown> {
+  const visibleIds = new Set(profiles.map((item) => item.profile_id));
   const canonical = {
     schema_version: '0.2.0',
     generated_at: now.toISOString(),
@@ -422,7 +454,7 @@ export function catalogDocument(
       outcomes: ['applicable', 'inapplicable', 'partially_applicable', 'unknown'],
       unknown_is_not_confirmed: true,
     },
-    profiles: profiles.map(profileView),
+    profiles: profiles.map((row) => profileView(row, visibleIds)),
     tools: components.map(componentView),
   };
   const digest = createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
