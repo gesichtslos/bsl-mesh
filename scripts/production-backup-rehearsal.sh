@@ -48,6 +48,26 @@ docker run -d --name "${pg_name}" \
   -e POSTGRES_DB=bslmesh_dev \
   postgres:18.6 >/dev/null
 
+# The official image starts a socket-only server (listen_addresses='') for initdb,
+# then stops it with pg_ctl -m fast before the real TCP server starts.
+# pg_isready without -h succeeds against that temporary server.
+postgres_ready() {
+  local answer
+  if ! pg_state="$(docker exec "${pg_name}" pg_isready -h 127.0.0.1 -p 5432 -U bslmesh_admin -d bslmesh_dev 2>&1)"; then
+    return 1
+  fi
+  if ! answer="$(docker exec "${pg_name}" bash -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -tAc "SELECT current_database()"' 2>&1)"; then
+    pg_state="${answer}"
+    return 1
+  fi
+  answer="$(printf '%s' "${answer}" | tr -d '[:space:]')"
+  if [ "${answer}" != "bslmesh_dev" ]; then
+    pg_state="sql=${answer:-empty}"
+    return 1
+  fi
+  pg_state="tcp-sql-ok"
+  return 0
+}
 stage=wait-for-containers
 s3_ready=0
 pg_ready=0
@@ -57,7 +77,7 @@ for _ in $(seq 1 120); do
   if [ "${s3_code}" = "403" ]; then
     s3_ready=1
   fi
-  if pg_state="$(docker exec "${pg_name}" pg_isready -U bslmesh_admin -d bslmesh_dev 2>&1)"; then
+  if postgres_ready; then
     pg_ready=1
   else
     pg_ready=0
@@ -68,7 +88,7 @@ for _ in $(seq 1 120); do
   sleep 1
 done
 if [ "${s3_ready}" != 1 ] || [ "${pg_ready}" != 1 ]; then
-  fail "S3 did not return 403 or PostgreSQL did not accept connections within 120s"
+  fail "S3 did not return 403 or PostgreSQL did not serve bslmesh_dev over TCP within 120s"
 fi
 stage=reject-bad-auth
 bad_auth="$(curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:${port}/bslmesh-backup-ci" -H 'authorization: AWS4-HMAC-SHA256 Credential=bad/20261022/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=deadbeef' || true)"
@@ -78,8 +98,8 @@ if [ "${bad_auth}" = "200" ] || [ "${bad_auth}" = "000" ]; then
   fail "S3 accepted or did not answer an unauthenticated bucket request"
 fi
 stage=postgres-ready
-if ! pg_state="$(docker exec "${pg_name}" pg_isready -U bslmesh_admin -d bslmesh_dev 2>&1)"; then
-  fail "PostgreSQL stopped accepting connections after the readiness check"
+if ! postgres_ready; then
+  fail "PostgreSQL did not keep serving bslmesh_dev over TCP"
 fi
 
 docker exec -i "${pg_name}" psql -U bslmesh_admin -d bslmesh_dev -v ON_ERROR_STOP=1 <<'SQL'
