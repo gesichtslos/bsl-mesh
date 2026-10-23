@@ -5,7 +5,7 @@
 ## Нормативные и близкие к нормативным источники
 
 - [MCP — спецификация 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28): современная версия протокола, обновлённые lifecycle, авторизация, расширения. См. [release announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/) и [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
-- [A2A Protocol v1.0.0](https://a2a-protocol.org/latest/specification/): проверено 24 октября 2026 года, последняя выпущенная версия на странице спецификации — 1.0.0. BM-022 использует Task, Message, Part, Artifact, Agent Card и операции SendMessage, GetTask, ListTasks, CancelTask. Профиль почтового обмена: `19-AGENT-HANDOFF.md`. Свой несовместимый протокол не проектируется.
+- [A2A Protocol v1.0.0](https://a2a-protocol.org/latest/specification/): проверено 24 октября 2026 года, последняя выпущенная версия на странице спецификации — 1.0.0. BM-022 использует Task, Message, Part, Artifact, Agent Card и операции SendMessage, GetTask, ListTasks, CancelTask. Профиль почтового обмена: `19-AGENT-HANDOFF.md`. BM-023 связывает задачи того же профиля общим `contextId` пространства: `20-SECURE-WORKSPACES.md`. Свой несовместимый протокол не проектируется.
 - [Agent Skills](https://agentskills.io/specification): переносимый каталог с `SKILL.md`, frontmatter и ресурсами; для удобства участников, а не вместо API.
 - [AGENTS.md](https://agents.md/): инструкции для coding-агентов внутри репозиториев.
 - [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457): структура сообщений REST-ошибок.
