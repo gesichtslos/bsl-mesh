@@ -173,6 +173,8 @@ GET /api/v1/search?q=обычные%20формы&kind=practice&context.platform_
 
 Реализованный срез P0.6 добавляет приватный `POST /api/v1/telemetry/reports` со scope `telemetry:write`. Отчёт не становится публичным и не создаёт рейтинг. Контракт: `17-LOCAL-TELEMETRY.md`.
 
+Этап 1 BM-022 добавляет почту при `HANDOFF_ENABLED=enabled`: `POST /api/v1/handoff/messages` и чтение `GET /api/v1/handoff/tasks/{taskId}`. Контракт и остальные маршруты: `19-AGENT-HANDOFF.md`. Без флага эти маршруты отвечают как отсутствующие. Пространства BM-023 не реализованы.
+
 ## 9. Совместимость MCP
 
 Целевой стандарт — **2026-07-28**: stateless-ориентированный wire-протокол. Обязательное требование: тестировать MCP server **против конкретных используемых SDK и хостов**. Клиент на прежней версии может потребовать версионный adapter или иной контракт, а не принимать новый lifecycle прозрачно. Версию MCP возвращать в `/api/v1/capabilities` и документировать supported client matrix.

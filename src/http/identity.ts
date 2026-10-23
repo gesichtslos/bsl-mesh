@@ -24,10 +24,12 @@ const scopeSchema = {
     'knowledge:read',
     'meetups:read',
     'tools:read',
+    'handoff:read',
     'cases:write',
     'evidence:write',
     'meetups:write',
     'telemetry:write',
+    'handoff:write',
   ],
 } as const;
 

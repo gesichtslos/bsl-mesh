@@ -27,6 +27,7 @@ export type AppConfig = {
   registryDemonstration: boolean;
   publicHostname: string | null;
   trustProxyHops: number;
+  handoffEnabled: boolean;
 };
 
 export class ConfigError extends Error {
@@ -54,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     registryDemonstration: env['REGISTRY_DEMONSTRATION']?.trim() === 'enabled',
     publicHostname: readPublicHostname(env),
     trustProxyHops: readProxyHops(env),
+    handoffEnabled: readEnabled(env, 'HANDOFF_ENABLED'),
   };
 }
 
@@ -143,6 +145,17 @@ function readSourceKind(
     return value;
   }
   throw new ConfigError('KNOWLEDGE_SOURCE_KIND must be organic, synthetic, or import.');
+}
+
+function readEnabled(env: NodeJS.ProcessEnv, name: string): boolean {
+  const value = env[name]?.trim() ?? '';
+  if (value === '' || value === 'disabled') {
+    return false;
+  }
+  if (value === 'enabled') {
+    return true;
+  }
+  throw new ConfigError(`${name} must be enabled or disabled.`);
 }
 
 function readPublicHostname(env: NodeJS.ProcessEnv): string | null {

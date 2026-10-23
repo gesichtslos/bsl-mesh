@@ -80,3 +80,71 @@ export const getStarterProfileInput = z.object({
 export const getCatalogSnapshotInput = z.object({
   catalog_version: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
+
+const handoffKey = z.string().regex(/^[A-Za-z0-9_-]{8,128}$/);
+const handoffState = z.enum([
+  'TASK_STATE_WORKING',
+  'TASK_STATE_INPUT_REQUIRED',
+  'TASK_STATE_AUTH_REQUIRED',
+  'TASK_STATE_COMPLETED',
+  'TASK_STATE_FAILED',
+  'TASK_STATE_REJECTED',
+]);
+const escalationReason = z.enum([
+  'missing_authority',
+  'incompatible_context',
+  'private_data',
+  'ambiguous_request',
+  'policy_rejection',
+  'recipient_unavailable',
+]);
+
+export const handoffProfileInput = z.object({
+  availability: z.enum(['accepting', 'paused']),
+  skills: z.array(z.object({
+    id: z.string().regex(/^[a-z0-9-]{1,40}$/),
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(400),
+    tags: z.array(z.string().min(1).max(24)).max(8),
+  }).strict()).max(8),
+  idempotency_key: handoffKey,
+}).strict();
+
+export const handoffAllowInput = z.object({
+  sender_agent_id: z.uuid(),
+  idempotency_key: handoffKey,
+}).strict();
+
+export const handoffSendInput = z.object({
+  message_id: handoffKey,
+  role: z.enum(['ROLE_USER', 'ROLE_AGENT']),
+  text: z.string().min(1).max(8000),
+  recipient_agent_id: z.uuid().optional(),
+  task_id: z.uuid().optional(),
+  context_id: z.uuid().optional(),
+  state: handoffState.optional(),
+  escalation_reason: escalationReason.optional(),
+  human_participated: z.boolean().optional(),
+}).strict();
+
+export const handoffTaskInput = z.object({
+  task_id: z.uuid(),
+  history_length: z.number().int().min(0).max(100).optional(),
+}).strict();
+
+export const handoffListInput = z.object({
+  context_id: z.uuid().optional(),
+  page_size: z.number().int().min(1).max(50).optional(),
+  history_length: z.number().int().min(0).max(100).optional(),
+}).strict();
+
+export const handoffCancelInput = z.object({
+  task_id: z.uuid(),
+  idempotency_key: handoffKey,
+}).strict();
+
+export const handoffCardInput = z.object({
+  agent_id: z.uuid(),
+}).strict();
+
+export const handoffAgentsInput = z.object({}).strict();

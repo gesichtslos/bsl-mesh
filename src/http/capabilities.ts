@@ -6,7 +6,8 @@ export const API_VERSION = '0.1.0';
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
 export const MCP_LEGACY_PROTOCOL_VERSION = '2025-11-25';
 
-export function capabilityDocument() {
+export function capabilityDocument(handoffEnabled = false) {
+  const features = ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'] as const;
   return {
     api_version: API_VERSION,
     mcp: {
@@ -17,7 +18,7 @@ export function capabilityDocument() {
       auth: 'bearer-credential' as const,
       oauth: 'unsupported' as const,
     },
-    features: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'] as const,
+    features: handoffEnabled ? [...features, 'handoff'] : [...features],
   };
 }
 
@@ -42,14 +43,14 @@ const capabilitiesSchema = {
     },
     features: {
       type: 'array',
-      items: { type: 'string', enum: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'] },
+      items: { type: 'string', enum: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry', 'handoff'] },
     },
   },
 } as const;
 
-export const capabilitiesRoutes: FastifyPluginAsync = async (app) => {
+export const capabilitiesRoutes: FastifyPluginAsync<{ handoffEnabled: boolean }> = async (app, options) => {
   app.get('/api/v1/capabilities', { schema: { response: { 200: capabilitiesSchema } } }, async () => (
-    capabilityDocument()
+    capabilityDocument(options.handoffEnabled)
   ));
 
   app.post(

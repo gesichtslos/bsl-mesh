@@ -28,7 +28,10 @@ describe('loadConfig', () => {
       registryDemonstration: false,
       publicHostname: null,
       trustProxyHops: 0,
+      handoffEnabled: false,
     });
+    expect(loadConfig({ ...complete, HANDOFF_ENABLED: 'enabled' }).handoffEnabled).toBe(true);
+    expect(() => loadConfig({ ...complete, HANDOFF_ENABLED: 'yes' })).toThrow('HANDOFF_ENABLED');
   });
 
   test('assigns synthetic knowledge outside production and organic knowledge in production', () => {

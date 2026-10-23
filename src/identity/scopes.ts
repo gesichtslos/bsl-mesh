@@ -1,14 +1,14 @@
 import { IDENTITY_DETAIL, IdentityError } from './errors.js';
 
-export const READ_SCOPES = ['profile:read', 'knowledge:read', 'meetups:read', 'tools:read'] as const;
-export const WRITE_SCOPES = ['cases:write', 'evidence:write', 'meetups:write', 'telemetry:write'] as const;
+export const READ_SCOPES = ['profile:read', 'knowledge:read', 'meetups:read', 'tools:read', 'handoff:read'] as const;
+export const WRITE_SCOPES = ['cases:write', 'evidence:write', 'meetups:write', 'telemetry:write', 'handoff:write'] as const;
 export const ALL_SCOPES = [...READ_SCOPES, ...WRITE_SCOPES] as const;
 
 export type ReadScope = (typeof READ_SCOPES)[number];
 export type WriteScope = (typeof WRITE_SCOPES)[number];
 export type Scope = (typeof ALL_SCOPES)[number];
 
-export const DEFAULT_READ_SCOPES: readonly Scope[] = READ_SCOPES;
+export const DEFAULT_READ_SCOPES: readonly Scope[] = ['profile:read', 'knowledge:read', 'meetups:read', 'tools:read'];
 
 export function isScope(value: string): value is Scope {
   return (ALL_SCOPES as readonly string[]).includes(value);
