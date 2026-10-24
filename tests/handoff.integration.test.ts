@@ -438,3 +438,74 @@ test('handoff rejects missing authority, incompatible sends, and does not execut
   });
   expect(missing.statusCode).toBe(404);
 });
+
+test('the recipient can list only waiting tasks and claim one of them once', async () => {
+  const sender = await agentFor(app, await sessionFor(app, 'handoff-list-a@example.test'), 'List sender');
+  const recipient = await agentFor(app, await sessionFor(app, 'handoff-list-b@example.test'), 'List recipient');
+  await app.inject({
+    method: 'POST',
+    url: '/api/v1/handoff/profile',
+    headers: { authorization: `Bearer ${recipient.token}`, 'idempotency-key': key() },
+    payload: { availability: 'accepting', skills: [SKILL] },
+  });
+  await app.inject({
+    method: 'POST',
+    url: '/api/v1/handoff/allowances',
+    headers: { authorization: `Bearer ${recipient.token}`, 'idempotency-key': key() },
+    payload: { sender_agent_id: sender.id },
+  });
+  const firstId = key();
+  const first = await app.inject({
+    method: 'POST',
+    url: '/api/v1/handoff/messages',
+    headers: { authorization: `Bearer ${sender.token}`, 'idempotency-key': firstId },
+    payload: sendBody(firstId, recipient.id, 'Первое ожидающее поручение.'),
+  });
+  expect(first.statusCode).toBe(201);
+  const taskId = (first.json() as { id: string }).id;
+  const listed = await app.inject({
+    method: 'GET',
+    url: '/api/v1/handoff/tasks?role=recipient&state=TASK_STATE_SUBMITTED&historyLength=0',
+    headers: { authorization: `Bearer ${recipient.token}` },
+  });
+  expect(listed.statusCode).toBe(200);
+  const tasks = (listed.json() as { tasks: TaskBody[] }).tasks;
+  expect(tasks.some((item) => item.id === taskId && item.status.state === 'TASK_STATE_SUBMITTED')).toBe(true);
+  expect(tasks.every((item) => item.history.length === 0)).toBe(true);
+  const claimId = `claim-${taskId.replaceAll('-', '')}`;
+  const claim = {
+    message: {
+      messageId: claimId,
+      taskId,
+      role: 'ROLE_AGENT',
+      parts: [{ text: 'Локальный адаптер принимает задачу только для текстового ответа.' }],
+    },
+    configuration: { returnImmediately: true },
+    metadata: { [EXTENSION]: { state: 'TASK_STATE_WORKING', claimToken: 'adapter-list-claim-token' } },
+  };
+  const claimed = await app.inject({
+    method: 'POST',
+    url: '/api/v1/handoff/messages',
+    headers: { authorization: `Bearer ${recipient.token}`, 'idempotency-key': claimId },
+    payload: claim,
+  });
+  expect(claimed.statusCode).toBe(200);
+  expect((claimed.json() as TaskBody).status.state).toBe('TASK_STATE_WORKING');
+  const secondClaimId = key();
+  const lost = await app.inject({
+    method: 'POST',
+    url: '/api/v1/handoff/messages',
+    headers: { authorization: `Bearer ${recipient.token}`, 'idempotency-key': secondClaimId },
+    payload: {
+      ...claim,
+      message: { ...claim.message, messageId: secondClaimId },
+    },
+  });
+  expect(lost.statusCode).toBe(409);
+  const waiting = await app.inject({
+    method: 'GET',
+    url: '/api/v1/handoff/tasks?role=recipient&state=TASK_STATE_SUBMITTED',
+    headers: { authorization: `Bearer ${recipient.token}` },
+  });
+  expect((waiting.json() as { tasks: TaskBody[] }).tasks.some((item) => item.id === taskId)).toBe(false);
+});

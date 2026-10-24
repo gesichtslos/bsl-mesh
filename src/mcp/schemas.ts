@@ -136,6 +136,17 @@ export const handoffListInput = z.object({
   context_id: z.uuid().optional(),
   page_size: z.number().int().min(1).max(50).optional(),
   history_length: z.number().int().min(0).max(100).optional(),
+  role: z.enum(['recipient', 'requester']).optional(),
+  state: z.enum([
+    'TASK_STATE_SUBMITTED',
+    'TASK_STATE_WORKING',
+    'TASK_STATE_INPUT_REQUIRED',
+    'TASK_STATE_AUTH_REQUIRED',
+    'TASK_STATE_COMPLETED',
+    'TASK_STATE_FAILED',
+    'TASK_STATE_CANCELED',
+    'TASK_STATE_REJECTED',
+  ]).optional(),
 }).strict();
 
 export const handoffCancelInput = z.object({

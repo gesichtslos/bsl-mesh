@@ -396,6 +396,8 @@ export function buildMcpServer(input: {
             accessToken: token,
             requestId: 'mcp',
             contextId: args.context_id,
+            role: args.role,
+            state: args.state,
             pageSize: args.page_size ?? 20,
             historyLength: args.history_length,
           }));
