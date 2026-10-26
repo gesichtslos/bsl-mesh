@@ -20,6 +20,7 @@ export async function runCycle(input: {
 }): Promise<CycleResult> {
   let published = 0;
   let uncertain = 0;
+  await input.mesh.ping();
   let owned;
   try {
     owned = await input.mesh.listByState('TASK_STATE_WORKING');
@@ -88,6 +89,13 @@ export async function runCycle(input: {
       return { published, uncertain, stopped: true };
     }
     throw error;
+  }
+  if (waiting.length > 0) {
+    const readiness = await input.runtime.ready(input.workspace);
+    if (!readiness.ok) {
+      input.log(`Cursor is not ready, leaving tasks waiting: ${readiness.reason}`);
+      return { published, uncertain, stopped: false };
+    }
   }
   let started = 0;
   for (const task of waiting) {

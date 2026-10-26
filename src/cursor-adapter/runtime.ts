@@ -17,13 +17,44 @@ export type CursorAnswer = {
   durationApiMs: number | null;
 };
 
+export type CursorReadiness = {
+  ok: boolean;
+  reason: string;
+};
+
 export type CursorRuntime = {
+  ready(workspace: string): Promise<CursorReadiness>;
   createChat(workspace: string): Promise<string>;
   answer(workspace: string, sessionId: string, prompt: string): Promise<CursorAnswer>;
 };
 
 export function cliRuntime(bin: string, timeoutMs: number): CursorRuntime {
   return {
+    async ready(workspace) {
+      const status = await run(bin, ['status'], workspace, 15_000);
+      const statusText = `${status.stdout}\n${status.stderr}`;
+      if (/not logged in/i.test(statusText) || !/logged in/i.test(statusText)) {
+        return { ok: false, reason: 'Cursor CLI is not logged in.' };
+      }
+      try {
+        await run(bin, [
+          '--print',
+          '--mode',
+          'ask',
+          '--sandbox',
+          'enabled',
+          '--output-format',
+          'text',
+          '--workspace',
+          workspace,
+          'Reply with exactly the word pong. Do not use tools.',
+        ], workspace, Math.min(timeoutMs, 60_000));
+      } catch (error) {
+        const reason = error instanceof CursorRunError ? error.message : 'Cursor is not ready.';
+        return { ok: false, reason };
+      }
+      return { ok: true, reason: 'Cursor CLI is logged in and the workspace answered.' };
+    },
     async createChat(workspace) {
       const output = await run(bin, ['create-chat'], workspace, timeoutMs);
       const sessionId = output.stdout.trim().split('\n').at(-1)?.trim() ?? '';
@@ -64,12 +95,16 @@ function run(
       const err = String(stderr);
       if (error !== null) {
         const timedOut = 'killed' in error && error.killed === true;
-        const fatal = /not logged in|authentication|api key|unauthorized|401/i.test(`${err}\n${out}\n${error.message}`);
+        const blob = `${err}\n${out}\n${error.message}`;
+        const fatal = /not logged in|authentication|api key|unauthorized|401/i.test(blob);
+        const trust = /workspace trust/i.test(blob);
         const message = timedOut
           ? 'Cursor timed out.'
           : fatal
             ? 'Cursor authentication failed.'
-            : 'Cursor runtime failed.';
+            : trust
+              ? 'The Cursor workspace is not trusted.'
+              : 'Cursor runtime failed.';
         reject(new CursorRunError(message, fatal));
         return;
       }
