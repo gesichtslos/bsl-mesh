@@ -162,6 +162,9 @@ async function ask(
     if (answer.modelCalls !== null) {
       input.log(`cursor model calls ${answer.modelCalls}`);
     }
+    if (answer.durationApiMs !== null) {
+      input.log(`cursor duration_api_ms ${answer.durationApiMs}`);
+    }
     const text = answer.text.trim();
     if (text === '' || text.length > 8000) {
       return null;

@@ -14,6 +14,7 @@ export type CursorAnswer = {
   text: string;
   modelCalls: number | null;
   usageNote: string | null;
+  durationApiMs: number | null;
 };
 
 export type CursorRuntime = {
@@ -87,12 +88,13 @@ export function readAnswer(stdout: string): CursorAnswer {
         text,
         modelCalls: numberField(parsed, ['modelCalls', 'model_calls']),
         usageNote: usageNote(parsed),
+        durationApiMs: numberField(parsed, ['duration_api_ms', 'durationApiMs']),
       };
     } catch {
-      return { text: trimmed, modelCalls: null, usageNote: null };
+      return { text: trimmed, modelCalls: null, usageNote: null, durationApiMs: null };
     }
   }
-  return { text: trimmed, modelCalls: null, usageNote: null };
+  return { text: trimmed, modelCalls: null, usageNote: null, durationApiMs: null };
 }
 
 function firstText(value: Record<string, unknown>): string {
