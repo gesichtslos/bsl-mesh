@@ -229,6 +229,8 @@ export class HandoffService {
     accessToken: string;
     requestId: string;
     contextId: string | undefined;
+    role: 'recipient' | 'requester' | undefined;
+    state: TaskState | undefined;
     pageSize: number;
     historyLength: number | undefined;
   }): Promise<{ tasks: Record<string, unknown>[]; pageSize: number; nextPageToken: null }> {
@@ -248,10 +250,15 @@ export class HandoffService {
          )
        )
          AND ($2::uuid IS NULL OR context_id = $2)
+         AND ($4::text IS NULL OR (
+           ($4 = 'recipient' AND recipient_agent_id = $1)
+           OR ($4 = 'requester' AND requester_agent_id = $1)
+         ))
+         AND ($5::text IS NULL OR state = $5)
          ${WORKSPACE_TASK_FILTER}
        ORDER BY updated_at DESC, id DESC
        LIMIT $3`,
-      [principal.agentId, input.contextId ?? null, input.pageSize],
+      [principal.agentId, input.contextId ?? null, input.pageSize, input.role ?? null, input.state ?? null],
     );
     const tasks = [];
     for (const row of rows.rows) {
@@ -387,6 +394,9 @@ export class HandoffService {
       if (draft.message.role !== 'ROLE_AGENT' || draft.directive.state === undefined) {
         throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
       }
+      if (draft.directive.state === 'TASK_STATE_WORKING' && task.state === 'TASK_STATE_WORKING') {
+        throw new IdentityError(409, 'Conflict', 'The task is already claimed.');
+      }
       this.assertTransition(task.state, draft.directive.state);
       this.assertEscalation(draft.directive.state, draft.directive.escalationReason);
       await this.insertMessage(client, principal, task.id, draft, current);
@@ -400,13 +410,18 @@ export class HandoffService {
         ...task.metadata,
         humanParticipated: draft.directive.humanParticipated ?? false,
         ...(draft.directive.escalationReason !== undefined ? { escalationReason: draft.directive.escalationReason } : {}),
+        ...(draft.directive.claimToken !== undefined ? { claimToken: draft.directive.claimToken } : {}),
       };
-      await client.query(
+      const claim = draft.directive.state === 'TASK_STATE_WORKING' && task.state === 'TASK_STATE_SUBMITTED';
+      const updated = await client.query(
         `UPDATE handoff_tasks
          SET state = $2, status_timestamp = $3, updated_at = $3, metadata = $4::jsonb
-         WHERE id = $1`,
-        [task.id, draft.directive.state, current, JSON.stringify(metadata)],
+         WHERE id = $1 AND ($5::boolean = false OR state = 'TASK_STATE_SUBMITTED')`,
+        [task.id, draft.directive.state, current, JSON.stringify(metadata), claim],
       );
+      if ((updated.rowCount ?? 0) === 0) {
+        throw new IdentityError(409, 'Conflict', 'The task is already claimed.');
+      }
       task.state = draft.directive.state;
       task.status_timestamp = current;
       task.metadata = metadata;

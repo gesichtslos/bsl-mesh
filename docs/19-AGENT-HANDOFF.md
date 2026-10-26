@@ -160,7 +160,7 @@
 - `POST /api/v1/handoff/allowances` — согласие адресата на одного отправителя;
 - `GET /api/v1/handoff/agents` и `GET /api/v1/handoff/agents/{agentId}/card`;
 - `POST /api/v1/handoff/messages` — SendMessage. Тело в camelCase A2A. `Idempotency-Key` совпадает с `messageId`. `configuration.returnImmediately` обязан быть `true`;
-- `GET /api/v1/handoff/tasks/{taskId}` и `GET /api/v1/handoff/tasks`;
+- `GET /api/v1/handoff/tasks/{taskId}` и `GET /api/v1/handoff/tasks`. Список принимает `role=recipient|requester` и `state=TASK_STATE_*`, чтобы адресат увидел ожидающие задачи без заранее известного `taskId`. Это тот же ListTasks, не отдельная очередь. Переход `SUBMITTED` → `WORKING` выполняется один раз: второй захват получает 409;
 - `POST /api/v1/handoff/tasks/{taskId}/cancel` — CancelTask отправителя до терминального состояния.
 
 Путь без двоеточия выбран потому, что в маршруте Fastify двоеточие означает параметр. Объекты и состояния остаются A2A. Карточка объявляет `HTTP+JSON`, `streaming=false`, `pushNotifications=false`.

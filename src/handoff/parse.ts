@@ -39,6 +39,7 @@ export type HandoffDirective = {
   state?: TaskState;
   humanParticipated?: boolean;
   escalationReason?: EscalationReason;
+  claimToken?: string;
 };
 
 export type SendDraft = {
@@ -150,7 +151,7 @@ function parseDirective(value: unknown): HandoffDirective {
     return {};
   }
   const body = object(extension);
-  exactKeys(body, ['recipientAgentId', 'state', 'humanParticipated', 'escalationReason']);
+  exactKeys(body, ['recipientAgentId', 'state', 'humanParticipated', 'escalationReason', 'claimToken']);
   const directive: HandoffDirective = {};
   if (body['recipientAgentId'] !== undefined) {
     directive.recipientAgentId = uuid(body['recipientAgentId']);
@@ -173,7 +174,30 @@ function parseDirective(value: unknown): HandoffDirective {
     }
     directive.escalationReason = body['escalationReason'] as EscalationReason;
   }
+  if (body['claimToken'] !== undefined) {
+    directive.claimToken = key(body['claimToken']);
+  }
   return directive;
+}
+
+export function parseListRole(value: unknown): 'recipient' | 'requester' | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === 'recipient' || value === 'requester') {
+    return value;
+  }
+  throw invalid();
+}
+
+export function parseListState(value: unknown): TaskState | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === 'string' && (TASK_STATES as readonly string[]).includes(value)) {
+    return value as TaskState;
+  }
+  throw invalid();
 }
 
 function parseSkill(value: unknown): Skill {

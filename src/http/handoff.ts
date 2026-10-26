@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 
 import { IDENTITY_DETAIL, IdentityError } from '../identity/errors.js';
 import type { HandoffService } from '../handoff/service.js';
-import { parseHistoryLength, parsePageSize, parseProfile, parseSend, parseSender } from '../handoff/parse.js';
+import { parseHistoryLength, parseListRole, parseListState, parsePageSize, parseProfile, parseSend, parseSender } from '../handoff/parse.js';
 import { problemSchema } from './problem.js';
 
 const problems = {
@@ -109,7 +109,7 @@ export const handoffRoutes: FastifyPluginAsync<{ service: HandoffService }> = as
     }),
   );
 
-  app.get<{ Querystring: { contextId?: string; pageSize?: string; historyLength?: string } }>(
+  app.get<{ Querystring: { contextId?: string; pageSize?: string; historyLength?: string; role?: string; state?: string } }>(
     '/api/v1/handoff/tasks',
     { schema: { response: { 200: open, ...problems } } },
     async (request) => {
@@ -121,6 +121,8 @@ export const handoffRoutes: FastifyPluginAsync<{ service: HandoffService }> = as
         accessToken: bearer(request.headers.authorization),
         requestId: request.id,
         contextId,
+        role: parseListRole(request.query.role),
+        state: parseListState(request.query.state),
         pageSize: parsePageSize(request.query.pageSize),
         historyLength: parseHistoryLength(request.query.historyLength),
       });
