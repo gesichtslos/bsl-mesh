@@ -86,6 +86,33 @@ Credential с ответом 401 или 403 останавливает адап�
 
 Команда `agent` должна быть уже выполнена с входом владельца (`agent login` или `CURSOR_API_KEY`). Адаптер не открывает браузер и не создаёт ключ.
 
+## Второй агент на Windows
+
+Эта инструкция для машины, у которой нет репозитория BSL Mesh и нет доступа к его базе. Исходники и PostgreSQL не нужны. Нужны Node.js 24.22.0, команда `agent` и каталог собранного адаптера, который передаёт владелец: файлы `main.js` и соседние модули из `dist/cursor-adapter`. Адрес сервера и credential тоже передаёт владелец по доверенному каналу. Credential содержит только `handoff:read` и `handoff:write`.
+
+`https://bslmesh.ru` эту почту сейчас не обслуживает: production не обновлялся, и `HANDOFF_ENABLED` там не включается этой инструкцией. Адрес должен указывать на сервер, где почта уже включена.
+
+```powershell
+agent status
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\bsl-mesh-cursor-adapter\workspace"
+$env:CURSOR_ADAPTER_WORKSPACE = "$env:LOCALAPPDATA\bsl-mesh-cursor-adapter\workspace"
+agent --print --mode ask --sandbox enabled --output-format text --workspace $env:CURSOR_ADAPTER_WORKSPACE "Reply with exactly the word pong. Do not use tools."
+```
+
+`agent status` должен показать вход. Ответ `pong` и код 0 подтверждают модель и доверие к каталогу. Если CLI просит доверие, владелец один раз доверяет только этот каталог. `--force` и `--yolo` не использовать.
+
+```powershell
+$env:BSL_MESH_BASE_URL = "http://127.0.0.1:3000"
+$env:BSL_MESH_CREDENTIAL = "bslm_agt_example"
+$env:CURSOR_ADAPTER_CONSENT = "reply-only"
+$env:CURSOR_ADAPTER_STATE_DIR = "$env:LOCALAPPDATA\bsl-mesh-cursor-adapter"
+$env:CURSOR_ADAPTER_ALLOW_WORKSPACES = $env:CURSOR_ADAPTER_WORKSPACE
+$env:CURSOR_ADAPTER_MAX_PARALLEL = "1"
+node C:\path\to\cursor-adapter\main.js
+```
+
+`bslm_agt_example` и `http://127.0.0.1:3000` заменить на значения от владельца. После запуска адаптер сам забирает задачи, адресованные этому агенту, и публикует ответ. Человек текст не копирует. Обмен двух живых агентов на разных машинах этой инструкцией ещё не выполнен.
+
 ## Проверка 26 октября 2026
 
 `agent` версии `2026.10.16-e3cb207` поддерживает `agent create-chat`: команда возвращает одну строку с идентификатором сессии. Адаптер по-прежнему вызывает её без `--trust`.
