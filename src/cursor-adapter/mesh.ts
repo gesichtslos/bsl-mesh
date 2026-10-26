@@ -30,6 +30,10 @@ export class MeshClient {
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
+  async ping(): Promise<void> {
+    await this.request('/health/ready', { method: 'GET' });
+  }
+
   async listWaiting(): Promise<ListedTask[]> {
     return this.listByState('TASK_STATE_SUBMITTED');
   }

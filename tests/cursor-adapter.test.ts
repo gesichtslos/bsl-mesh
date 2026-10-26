@@ -21,12 +21,18 @@ function mesh(options: {
   waiting?: boolean;
   claimToken?: string | null;
   failList?: MeshError;
+  failPing?: MeshError;
   failClaim?: MeshError;
   failPublish?: MeshError;
-} = {}): MeshClient & { chats: number; publishes: number } {
+} = {}): MeshClient & { claims: number; publishes: number } {
   const client = {
-    chats: 0,
+    claims: 0,
     publishes: 0,
+    async ping() {
+      if (options.failPing !== undefined) {
+        throw options.failPing;
+      }
+    },
     async listByState(state: string) {
       if (options.failList !== undefined && state === 'TASK_STATE_WORKING') {
         throw options.failList;
@@ -48,6 +54,7 @@ function mesh(options: {
       };
     },
     async claim() {
+      client.claims += 1;
       if (options.failClaim !== undefined) {
         throw options.failClaim;
       }
@@ -59,13 +66,18 @@ function mesh(options: {
       client.publishes += 1;
     },
   };
-  return client as unknown as MeshClient & { chats: number; publishes: number };
+  return client as unknown as MeshClient & { claims: number; publishes: number };
 }
 
-function runtime(): CursorRuntime & { created: number; answered: number } {
+function runtime(ready = true): CursorRuntime & { created: number; answered: number } {
   return {
     created: 0,
     answered: 0,
+    async ready() {
+      return ready
+        ? { ok: true, reason: 'ready' }
+        : { ok: false, reason: 'Cursor CLI is not logged in.' };
+    },
     async createChat() {
       this.created += 1;
       return 'chat-1';
@@ -169,6 +181,37 @@ test('a rejected credential stops the cycle before Cursor starts', async () => {
   });
   expect(result.stopped).toBe(true);
   expect(cursor.created).toBe(0);
+});
+
+test('an unready Cursor leaves the waiting task unclaimed', async () => {
+  const dir = workspace();
+  const mailbox = mesh();
+  const result = await runCycle({
+    mesh: mailbox,
+    runtime: runtime(false),
+    state: { adapterId: 'adapter-test', tasks: {} },
+    stateFile: path.join(dir, 'state.json'),
+    workspace: dir,
+    maxParallel: 1,
+    log() {},
+  });
+  expect(result.published).toBe(0);
+  expect(mailbox.claims).toBe(0);
+});
+
+test('a network failure does not claim a task', async () => {
+  const dir = workspace();
+  const mailbox = mesh({ failPing: new MeshError(0, 'network', true) });
+  await expect(runCycle({
+    mesh: mailbox,
+    runtime: runtime(),
+    state: { adapterId: 'adapter-test', tasks: {} },
+    stateFile: path.join(dir, 'state.json'),
+    workspace: dir,
+    maxParallel: 1,
+    log() {},
+  })).rejects.toMatchObject({ retryable: true });
+  expect(mailbox.claims).toBe(0);
 });
 
 test('a lost claim does not start Cursor', async () => {
