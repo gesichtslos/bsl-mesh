@@ -32,4 +32,9 @@ export const IDENTITY_DETAIL = {
   idempotencyMismatch: 'The idempotency key was already used with a different request.',
   validation: 'Request failed validation.',
   credentialClosed: 'The credential can no longer be rotated.',
+  invitationExpired: 'The invitation has expired.',
+  invitationUsed: 'The invitation has already been used.',
+  invitationClosed: 'The invitation can no longer be used.',
+  invitationMismatch: 'The confirmation does not match the connecting agent.',
+  invitationBusy: 'The invitation is already awaiting confirmation.',
 } as const;

@@ -4,6 +4,7 @@ import type { MagicLinkRoute } from '../identity/provider.js';
 import type { IdentityService } from '../identity/service.js';
 import { IDENTITY_DETAIL, IdentityError } from '../identity/errors.js';
 import { WRITE_SCOPES } from '../identity/scopes.js';
+import { anonymousRateKey } from '../knowledge/rate-key.js';
 import { problemSchema } from './problem.js';
 
 const problems = {
@@ -32,6 +33,22 @@ const scopeSchema = {
     'telemetry:write',
     'handoff:write',
     'workspaces:write',
+  ],
+} as const;
+
+const invitationScopeSchema = {
+  type: 'string',
+  enum: [
+    'profile:read',
+    'knowledge:read',
+    'meetups:read',
+    'tools:read',
+    'handoff:read',
+    'cases:write',
+    'evidence:write',
+    'meetups:write',
+    'telemetry:write',
+    'handoff:write',
   ],
 } as const;
 
@@ -359,6 +376,147 @@ export const identityRoutes: FastifyPluginAsync<{
         requestId: request.id,
       });
       return reply.code(204).send();
+    },
+  );
+
+  app.post<{ Body: { agent_id: string; scopes: string[]; invitation_ttl_seconds: number; credential_ttl_seconds: number } }>(
+    '/api/v1/owners/me/credential-invitations',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['agent_id', 'scopes', 'invitation_ttl_seconds', 'credential_ttl_seconds'],
+          properties: {
+            agent_id: { type: 'string' },
+            scopes: { type: 'array', minItems: 1, maxItems: 10, uniqueItems: true, items: invitationScopeSchema },
+            invitation_ttl_seconds: { type: 'integer', minimum: 60, maximum: 900 },
+            credential_ttl_seconds: { type: 'integer', minimum: 60, maximum: 86_400 },
+          },
+        },
+        response: { 201: { type: 'object', additionalProperties: true }, ...problems },
+      },
+    },
+    async (request, reply) => {
+      const result = await service.createCredentialInvitation({
+        sessionToken: bearer(request.headers.authorization),
+        idempotencyKey: idempotencyKey(request.headers['idempotency-key']),
+        agentId: request.body.agent_id,
+        scopes: request.body.scopes,
+        invitationTtlSeconds: request.body.invitation_ttl_seconds,
+        credentialTtlSeconds: request.body.credential_ttl_seconds,
+        requestId: request.id,
+      });
+      return reply.code(201).send(result.body);
+    },
+  );
+
+  app.get('/api/v1/owners/me/credential-invitations', { schema: { response: { 200: { type: 'object', additionalProperties: true }, ...problems } } }, async (request) => {
+    return service.listCredentialInvitations(bearer(request.headers.authorization));
+  });
+
+  app.post<{ Params: { id: string }; Body: { fingerprint: string } }>(
+    '/api/v1/owners/me/credential-invitations/:id/confirm',
+    {
+      schema: {
+        params: uuidParams,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['fingerprint'],
+          properties: { fingerprint: { type: 'string', pattern: '^[0-9a-f]{8}$' } },
+        },
+        response: { 200: { type: 'object', additionalProperties: true }, ...problems },
+      },
+    },
+    async (request, reply) => {
+      const result = await service.confirmCredentialInvitation({
+        sessionToken: bearer(request.headers.authorization),
+        idempotencyKey: idempotencyKey(request.headers['idempotency-key']),
+        invitationId: request.params.id,
+        fingerprint: request.body.fingerprint,
+        requestId: request.id,
+      });
+      return reply.code(200).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/owners/me/credential-invitations/:id/reject',
+    { schema: { params: uuidParams, response: { 200: { type: 'object', additionalProperties: true }, ...problems } } },
+    async (request, reply) => {
+      const result = await service.rejectCredentialInvitation({
+        sessionToken: bearer(request.headers.authorization),
+        idempotencyKey: idempotencyKey(request.headers['idempotency-key']),
+        invitationId: request.params.id,
+        requestId: request.id,
+      });
+      return reply.code(200).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/owners/me/credential-invitations/:id/revoke',
+    { schema: { params: uuidParams, response: { 200: { type: 'object', additionalProperties: true }, ...problems } } },
+    async (request, reply) => {
+      const result = await service.revokeCredentialInvitation({
+        sessionToken: bearer(request.headers.authorization),
+        idempotencyKey: idempotencyKey(request.headers['idempotency-key']),
+        invitationId: request.params.id,
+        requestId: request.id,
+      });
+      return reply.code(200).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { invite_code: string; binding_hash: string } }>(
+    '/api/v1/credential-invitations/:id/present',
+    {
+      schema: {
+        params: uuidParams,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['invite_code', 'binding_hash'],
+          properties: {
+            invite_code: { type: 'string', minLength: 40, maxLength: 200 },
+            binding_hash: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+          },
+        },
+        response: { 200: { type: 'object', additionalProperties: true }, ...problems },
+      },
+    },
+    async (request) => service.presentCredentialInvitation({
+      invitationId: request.params.id,
+      inviteCode: request.body.invite_code,
+      bindingHash: request.body.binding_hash,
+      clientKey: anonymousRateKey(request.ip),
+      requestId: request.id,
+    }),
+  );
+
+  app.post<{ Params: { id: string }; Body: { binding: string } }>(
+    '/api/v1/credential-invitations/:id/activate',
+    {
+      schema: {
+        params: uuidParams,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['binding'],
+          properties: { binding: { type: 'string', minLength: 43, maxLength: 43 } },
+        },
+        response: { 201: { type: 'object', additionalProperties: true }, ...problems },
+      },
+    },
+    async (request, reply) => {
+      const result = await service.activateCredentialInvitation({
+        invitationId: request.params.id,
+        binding: request.body.binding,
+        clientKey: anonymousRateKey(request.ip),
+        requestId: request.id,
+      });
+      return reply.code(201).send(result.body);
     },
   );
 };

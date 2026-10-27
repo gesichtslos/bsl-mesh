@@ -6,15 +6,16 @@ import { IDENTITY_DETAIL, IdentityError } from './errors.js';
 import { uuidV7 } from './ids.js';
 import { createOneTimeCodeDelivery } from './provider.js';
 import { consumeRateLimit, MAGIC_LINK_EMAIL_LIMIT, type RatePrincipal } from './rate-limit.js';
-import { isScope, isWriteScope, resolveScopes, type Scope, type WriteScope } from './scopes.js';
+import { isScope, isWriteScope, resolveInvitationScopes, resolveScopes, type Scope, type WriteScope } from './scopes.js';
 import {
   expectedTokenPrefix,
   generateToken,
   hashRequest,
   hashToken,
   sameDigest,
+  type TokenKind,
 } from './tokens.js';
-import { parseDescription, parseDisplayName, parseEmail, parseTtlSeconds } from './validate.js';
+import { parseDescription, parseDisplayName, parseEmail, parseInvitationCredentialTtlSeconds, parseInvitationTtlSeconds, parseTtlSeconds } from './validate.js';
 
 const MAGIC_LINK_TTL_MS = 15 * 60 * 1000;
 const OWNER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -45,6 +46,19 @@ type CredentialRecord = {
   scopes: Scope[];
   expiresAt: Date;
   revokedAt: Date | null;
+};
+
+type InvitationRow = {
+  id: string;
+  owner_id: string;
+  agent_id: string;
+  scopes: string[];
+  invite_hash: string;
+  binding_hash: string | null;
+  status: string;
+  expires_at: Date;
+  credential_ttl_seconds: number;
+  revoked_at: Date | null;
 };
 
 export type ApiResult<T> = {
@@ -338,6 +352,350 @@ export class IdentityService {
       await this.finishIdempotent(client, owner.id, 'credential.create', input.idempotencyKey, persisted);
       return { statusCode: 201, body: { ...persisted, secret_available: true, token } };
     });
+  }
+
+  async createCredentialInvitation(input: {
+    sessionToken: string;
+    idempotencyKey: string;
+    agentId: string;
+    scopes: readonly string[];
+    invitationTtlSeconds: number;
+    credentialTtlSeconds: number;
+    requestId: string;
+  }): Promise<ApiResult<Record<string, unknown>>> {
+    const scopes = resolveInvitationScopes(input.scopes);
+    const invitationTtlSeconds = parseInvitationTtlSeconds(input.invitationTtlSeconds);
+    const credentialTtlSeconds = parseInvitationCredentialTtlSeconds(input.credentialTtlSeconds);
+    if (!UUID.test(input.agentId)) {
+      throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+    }
+    const requestHash = hashRequest({
+      agentId: input.agentId,
+      scopes,
+      invitationTtlSeconds,
+      credentialTtlSeconds,
+    });
+    const owner = await this.ownerFromToken(input.sessionToken);
+    await this.limit([{ kind: 'owner', id: owner.id, limit: this.config.rateLimitOwnerPerMinute }]);
+    return this.withTransaction(async (client) => {
+      const replay = await this.beginIdempotent(client, owner.id, 'invitation.create', input.idempotencyKey, requestHash);
+      if (replay !== null) {
+        return { statusCode: 201, body: replay };
+      }
+      await this.requireOwnAgent(client, owner.id, input.agentId);
+      const current = this.now();
+      const id = uuidV7(current);
+      const inviteCode = generateToken('invite');
+      const expiresAt = new Date(current.getTime() + invitationTtlSeconds * 1000);
+      await client.query(
+        `INSERT INTO credential_invitations (
+           id, owner_id, agent_id, scopes, invite_hash, status, expires_at, credential_ttl_seconds, created_at
+         ) VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8)`,
+        [id, owner.id, input.agentId, scopes, hashToken(inviteCode), expiresAt, credentialTtlSeconds, current],
+      );
+      const persisted = {
+        id,
+        agent_id: input.agentId,
+        scopes,
+        expires_at: expiresAt.toISOString(),
+        credential_ttl_seconds: credentialTtlSeconds,
+        status: 'pending',
+        secret_available: false,
+      };
+      await this.audit(client, {
+        ownerId: owner.id,
+        agentId: input.agentId,
+        actorKind: 'owner',
+        actorId: owner.id,
+        action: 'invitation.created',
+        result: 'success',
+        requestId: input.requestId,
+        detail: { agent_id: input.agentId, invitation_id: id, scopes },
+      });
+      await this.finishIdempotent(client, owner.id, 'invitation.create', input.idempotencyKey, persisted);
+      return { statusCode: 201, body: { ...persisted, secret_available: true, invite_code: inviteCode } };
+    });
+  }
+
+  async listCredentialInvitations(sessionToken: string): Promise<{ items: Record<string, unknown>[] }> {
+    const owner = await this.ownerFromToken(sessionToken);
+    await this.limit([{ kind: 'owner', id: owner.id, limit: this.config.rateLimitOwnerPerMinute }]);
+    const result = await this.pool.query<{
+      id: string;
+      agent_id: string;
+      scopes: string[];
+      status: string;
+      expires_at: Date;
+      credential_ttl_seconds: number;
+      binding_hash: string | null;
+      credential_id: string | null;
+    }>(
+      `SELECT id, agent_id, scopes, status, expires_at, credential_ttl_seconds, binding_hash, credential_id
+       FROM credential_invitations
+       WHERE owner_id = $1
+       ORDER BY created_at ASC, id ASC`,
+      [owner.id],
+    );
+    return {
+      items: result.rows.map((row) => ({
+        id: row.id,
+        agent_id: row.agent_id,
+        scopes: row.scopes,
+        status: row.status,
+        expires_at: row.expires_at.toISOString(),
+        credential_ttl_seconds: row.credential_ttl_seconds,
+        binding_fingerprint: row.binding_hash === null ? null : row.binding_hash.slice(0, 8),
+        credential_id: row.credential_id,
+      })),
+    };
+  }
+
+  async confirmCredentialInvitation(input: {
+    sessionToken: string;
+    idempotencyKey: string;
+    invitationId: string;
+    fingerprint: string;
+    requestId: string;
+  }): Promise<ApiResult<Record<string, unknown>>> {
+    return this.ownerInvitationTransition(input, 'invitation.confirm', async (client, row, ownerId, current) => {
+      this.assertInvitationOpen(row, current);
+      if (row.status !== 'presented' || row.binding_hash === null) {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationClosed);
+      }
+      if (!sameDigest(row.binding_hash.slice(0, 8), input.fingerprint)) {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationMismatch);
+      }
+      await client.query(
+        `UPDATE credential_invitations
+         SET status = 'confirmed', confirmed_at = $3
+         WHERE id = $1 AND owner_id = $2 AND status = 'presented'`,
+        [row.id, ownerId, current],
+      );
+      return { id: row.id, agent_id: row.agent_id, status: 'confirmed' };
+    });
+  }
+
+  async rejectCredentialInvitation(input: {
+    sessionToken: string;
+    idempotencyKey: string;
+    invitationId: string;
+    requestId: string;
+  }): Promise<ApiResult<Record<string, unknown>>> {
+    return this.ownerInvitationTransition(input, 'invitation.reject', async (client, row, ownerId) => {
+      if (row.status !== 'presented') {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationClosed);
+      }
+      await client.query(
+        `UPDATE credential_invitations
+         SET status = 'pending', binding_hash = NULL, presented_at = NULL
+         WHERE id = $1 AND owner_id = $2 AND status = 'presented'`,
+        [row.id, ownerId],
+      );
+      return { id: row.id, agent_id: row.agent_id, status: 'pending' };
+    });
+  }
+
+  async revokeCredentialInvitation(input: {
+    sessionToken: string;
+    idempotencyKey: string;
+    invitationId: string;
+    requestId: string;
+  }): Promise<ApiResult<Record<string, unknown>>> {
+    return this.ownerInvitationTransition(input, 'invitation.revoke', async (client, row, ownerId, current) => {
+      if (row.status === 'consumed') {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationUsed);
+      }
+      if (row.status !== 'revoked') {
+        await client.query(
+          `UPDATE credential_invitations
+           SET status = 'revoked', revoked_at = $3
+           WHERE id = $1 AND owner_id = $2 AND status IN ('pending', 'presented', 'confirmed')`,
+          [row.id, ownerId, current],
+        );
+      }
+      return { id: row.id, agent_id: row.agent_id, status: 'revoked', revoked_at: (row.revoked_at ?? current).toISOString() };
+    });
+  }
+
+  async presentCredentialInvitation(input: {
+    invitationId: string;
+    inviteCode: string;
+    bindingHash: string;
+    clientKey: string;
+    requestId: string;
+  }): Promise<Record<string, unknown>> {
+    if (!UUID.test(input.invitationId) || !/^[0-9a-f]{64}$/.test(input.bindingHash)) {
+      throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+    }
+    this.assertPresentedToken(input.inviteCode, 'invite');
+    await this.limit([{ kind: 'anonymous', id: `public:${input.clientKey}`, limit: this.config.rateLimitPublicPerMinute }]);
+    return this.withTransaction(async (client) => {
+      const row = await this.lockInvitation(client, input.invitationId);
+      if (row === null || !sameDigest(row.invite_hash, hashToken(input.inviteCode))) {
+        throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+      }
+      const current = this.now();
+      this.assertInvitationOpen(row, current);
+      if (row.status === 'presented' && row.binding_hash !== null && sameDigest(row.binding_hash, input.bindingHash)) {
+        return { id: row.id, status: 'presented', binding_fingerprint: row.binding_hash.slice(0, 8), expires_at: row.expires_at.toISOString() };
+      }
+      if (row.status !== 'pending') {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationBusy);
+      }
+      await client.query(
+        `UPDATE credential_invitations
+         SET status = 'presented', binding_hash = $3, presented_at = $4
+         WHERE id = $1 AND owner_id = $2 AND status = 'pending'`,
+        [row.id, row.owner_id, input.bindingHash, current],
+      );
+      await this.audit(client, {
+        ownerId: row.owner_id,
+        agentId: row.agent_id,
+        actorKind: 'system',
+        actorId: row.owner_id,
+        action: 'invitation.presented',
+        result: 'success',
+        requestId: input.requestId,
+        detail: { agent_id: row.agent_id, invitation_id: row.id },
+      });
+      return { id: row.id, status: 'presented', binding_fingerprint: input.bindingHash.slice(0, 8), expires_at: row.expires_at.toISOString() };
+    });
+  }
+
+  async activateCredentialInvitation(input: {
+    invitationId: string;
+    binding: string;
+    clientKey: string;
+    requestId: string;
+  }): Promise<ApiResult<CredentialBody>> {
+    if (!UUID.test(input.invitationId) || !/^[A-Za-z0-9_-]{43}$/.test(input.binding)) {
+      throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+    }
+    await this.limit([{ kind: 'anonymous', id: `public:${input.clientKey}`, limit: this.config.rateLimitPublicPerMinute }]);
+    const bindingHash = hashToken(input.binding);
+    return this.withTransaction(async (client) => {
+      const row = await this.lockInvitation(client, input.invitationId);
+      if (row === null || row.binding_hash === null || !sameDigest(row.binding_hash, bindingHash)) {
+        throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+      }
+      const current = this.now();
+      if (row.status === 'consumed') {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationUsed);
+      }
+      this.assertInvitationOpen(row, current);
+      if (row.status !== 'confirmed') {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationClosed);
+      }
+      const credentialId = uuidV7(current);
+      const token = generateToken('agent');
+      const expiresAt = new Date(current.getTime() + row.credential_ttl_seconds * 1000);
+      await client.query(
+        `INSERT INTO credentials (id, owner_id, agent_id, token_hash, scopes, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [credentialId, row.owner_id, row.agent_id, hashToken(token), row.scopes, expiresAt, current],
+      );
+      const updated = await client.query(
+        `UPDATE credential_invitations
+         SET status = 'consumed', consumed_at = $3, credential_id = $4
+         WHERE id = $1 AND owner_id = $2 AND status = 'confirmed' AND consumed_at IS NULL
+         RETURNING id`,
+        [row.id, row.owner_id, current, credentialId],
+      );
+      if (updated.rowCount !== 1) {
+        throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationUsed);
+      }
+      await this.audit(client, {
+        ownerId: row.owner_id,
+        agentId: row.agent_id,
+        actorKind: 'system',
+        actorId: row.agent_id,
+        action: 'credential.issued',
+        result: 'success',
+        requestId: input.requestId,
+        detail: { agent_id: row.agent_id, credential_id: credentialId, invitation_id: row.id, scopes: row.scopes },
+      });
+      return {
+        statusCode: 201,
+        body: {
+          id: credentialId,
+          agent_id: row.agent_id,
+          scopes: row.scopes.filter((item): item is Scope => isScope(item)),
+          expires_at: expiresAt.toISOString(),
+          secret_available: true,
+          token,
+        },
+      };
+    });
+  }
+
+  private async ownerInvitationTransition(
+    input: {
+      sessionToken: string;
+      idempotencyKey: string;
+      invitationId: string;
+      fingerprint?: string;
+      requestId: string;
+    },
+    operation: string,
+    apply: (client: PoolClient, row: InvitationRow, ownerId: string, current: Date) => Promise<Record<string, unknown>>,
+  ): Promise<ApiResult<Record<string, unknown>>> {
+    if (!UUID.test(input.invitationId)) {
+      throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+    }
+    const requestHash = hashRequest({ invitationId: input.invitationId, fingerprint: input.fingerprint ?? '' });
+    const owner = await this.ownerFromToken(input.sessionToken);
+    await this.limit([{ kind: 'owner', id: owner.id, limit: this.config.rateLimitOwnerPerMinute }]);
+    return this.withTransaction(async (client) => {
+      const replay = await this.beginIdempotent(client, owner.id, operation, input.idempotencyKey, requestHash);
+      if (replay !== null) {
+        return { statusCode: 200, body: replay };
+      }
+      const row = await this.lockInvitation(client, input.invitationId);
+      if (row === null || row.owner_id !== owner.id) {
+        throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+      }
+      const body = await apply(client, row, owner.id, this.now());
+      await this.audit(client, {
+        ownerId: owner.id,
+        agentId: row.agent_id,
+        actorKind: 'owner',
+        actorId: owner.id,
+        action: operation,
+        result: 'success',
+        requestId: input.requestId,
+        detail: { agent_id: row.agent_id, invitation_id: row.id },
+      });
+      await this.finishIdempotent(client, owner.id, operation, input.idempotencyKey, body, 200);
+      return { statusCode: 200, body };
+    });
+  }
+
+  private async lockInvitation(client: PoolClient, invitationId: string): Promise<InvitationRow | null> {
+    const result = await client.query<InvitationRow>(
+      `SELECT id, owner_id, agent_id, scopes, invite_hash, binding_hash, status, expires_at,
+              credential_ttl_seconds, revoked_at
+       FROM credential_invitations
+       WHERE id = $1
+       FOR UPDATE`,
+      [invitationId],
+    );
+    const row = result.rows[0];
+    if (row === undefined || !row.scopes.every((item) => isScope(item))) {
+      return null;
+    }
+    return row;
+  }
+
+  private assertInvitationOpen(row: InvitationRow, current: Date): void {
+    if (row.status === 'revoked') {
+      throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationClosed);
+    }
+    if (row.status === 'consumed') {
+      throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationUsed);
+    }
+    if (row.expires_at.getTime() <= current.getTime()) {
+      throw new IdentityError(409, 'Conflict', IDENTITY_DETAIL.invitationExpired);
+    }
   }
 
   async listCredentials(sessionToken: string): Promise<{ items: Record<string, unknown>[] }> {
@@ -764,7 +1122,7 @@ export class IdentityService {
     };
   }
 
-  private assertPresentedToken(token: string, kind: 'owner' | 'agent' | 'magic'): void {
+  private assertPresentedToken(token: string, kind: TokenKind): void {
     if (
       token.length < 40
       || token.length > 200

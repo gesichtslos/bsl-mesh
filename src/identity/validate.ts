@@ -45,7 +45,19 @@ export function parseDescription(value: string | undefined): string {
 }
 
 export function parseTtlSeconds(value: number): number {
-  if (!Number.isInteger(value) || value < 60 || value > 7_776_000) {
+  return parseBoundedInteger(value, 60, 7_776_000);
+}
+
+export function parseInvitationTtlSeconds(value: number): number {
+  return parseBoundedInteger(value, 60, 900);
+}
+
+export function parseInvitationCredentialTtlSeconds(value: number): number {
+  return parseBoundedInteger(value, 60, 86_400);
+}
+
+function parseBoundedInteger(value: number, minimum: number, maximum: number): number {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
     throw invalid();
   }
   return value;

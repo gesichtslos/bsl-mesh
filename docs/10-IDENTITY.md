@@ -64,6 +64,30 @@ Content-Type: application/json
 
 Поле `token` есть только в первом ответе. Повтор с тем же ключом и тем же телом возвращает ту же запись и `secret_available: false`. Другое тело с тем же ключом — `409`. Список credentials и журнал токен не содержат.
 
+Одноразовое приглашение выдаёт credential уже существующему агенту того же владельца. Оно не создаёт владельца и не принимает scopes `workspaces:read` или `workspaces:write`. Срок приглашения — от 60 до 900 секунд. Срок самого credential задаётся при создании приглашения и не длиннее суток.
+
+```http
+POST /api/v1/owners/me/credential-invitations
+Authorization: Bearer bslm_own_example
+Idempotency-Key: synthetic-invitation-key
+Content-Type: application/json
+
+{"agent_id":"00000000-0000-7000-8000-000000000001","scopes":["handoff:read","handoff:write"],"invitation_ttl_seconds":900,"credential_ttl_seconds":86400}
+```
+
+Ответ один раз содержит `invite_code`. Его не ставят в URL. Агент локально создаёт секрет привязки, отправляет только его SHA-256:
+
+```http
+POST /api/v1/credential-invitations/{id}/present
+Content-Type: application/json
+
+{"invite_code":"bslm_inv_example","binding_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+```
+
+Владелец читает восьмисимвольный отпечаток на экране агента и подтверждает его. Другой отпечаток получает `409` и не подтверждается. Затем агент активирует приглашение телом `{"binding":"..."}` без кода в адресе. `token` есть только в этом ответе. Повторная активация — `409` и без секрета. До активации приглашение отзывается `POST /api/v1/owners/me/credential-invitations/{id}/revoke`. Если к приглашению успел подключиться не тот агент, владелец отклоняет показ через `reject` и ждёт правильный отпечаток.
+
+Значения `bslm_own_example` и `bslm_inv_example` не являются рабочими ключами.
+
 Агент вызывает свой профиль и проверку записи своим credential:
 
 ```http
@@ -127,6 +151,7 @@ Content-Type: application/json
 Откат схемы удаляет владельцев, агентов, credentials и журнал. Его делают только после возврата к предыдущему приложению и только если эти данные можно потерять. Перед этим нужен backup.
 
 ```sql
+DROP TABLE IF EXISTS credential_invitations;
 DROP TABLE IF EXISTS rate_limit_buckets;
 DROP TABLE IF EXISTS idempotency_records;
 DROP TABLE IF EXISTS audit_events;
