@@ -82,6 +82,13 @@ if (appEnv.PUBLIC_HOSTNAME !== 'bslmesh.ru' || appEnv.TRUST_PROXY_HOPS !== '1') 
 if (appEnv.PGUSER !== 'bslmesh_app') {
   errors.push('the application is not using the limited database role');
 }
+const expectedHandoff = process.env.CHECK_HANDOFF_ENABLED ?? 'disabled';
+if (expectedHandoff !== 'disabled' && expectedHandoff !== 'enabled') {
+  errors.push('CHECK_HANDOFF_ENABLED must be disabled or enabled');
+}
+if (appEnv.HANDOFF_ENABLED !== expectedHandoff) {
+  errors.push(`the application handoff flag is ${appEnv.HANDOFF_ENABLED ?? 'unset'}, expected ${expectedHandoff}`);
+}
 const appCommand = JSON.stringify(app?.entrypoint ?? app?.command ?? []);
 if (!appCommand.includes('dist/server.js') || appCommand.includes('migrate.js')) {
   errors.push('the application process still runs migrations');
