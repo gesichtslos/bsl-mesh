@@ -19,6 +19,7 @@ export type AuditDetail = {
   source_kind?: 'organic' | 'synthetic';
   task_id?: string;
   peer_agent_id?: string;
+  invitation_id?: string;
 };
 
 export function auditDetail(input: Record<string, unknown>): AuditDetail {
@@ -65,6 +66,9 @@ export function auditDetail(input: Record<string, unknown>): AuditDetail {
   }
   if (typeof input['peer_agent_id'] === 'string') {
     detail.peer_agent_id = input['peer_agent_id'];
+  }
+  if (typeof input['invitation_id'] === 'string') {
+    detail.invitation_id = input['invitation_id'];
   }
   if (input['source_kind'] === 'organic' || input['source_kind'] === 'synthetic') {
     detail.source_kind = input['source_kind'];

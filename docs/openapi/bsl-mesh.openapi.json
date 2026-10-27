@@ -184,6 +184,25 @@
     "/api/v1/owners/me/credentials/{id}/rotate": {
       "post": { "tags": ["identity"], "operationId": "rotateCredential", "security": [{ "ownerSession": [] }], "parameters": [{ "$ref": "#/components/parameters/Uuid" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "description": "Replacement credential." }, "default": { "$ref": "#/components/responses/Problem" } } }
     },
+    "/api/v1/owners/me/credential-invitations": {
+      "get": { "tags": ["identity"], "operationId": "listCredentialInvitations", "security": [{ "ownerSession": [] }], "responses": { "200": { "description": "Invitation metadata. Invite codes and credentials are not returned." }, "default": { "$ref": "#/components/responses/Problem" } } },
+      "post": { "tags": ["identity"], "operationId": "createCredentialInvitation", "security": [{ "ownerSession": [] }], "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "201": { "description": "Invitation for an existing agent. The invite code is returned once." }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/api/v1/owners/me/credential-invitations/{id}/confirm": {
+      "post": { "tags": ["identity"], "operationId": "confirmCredentialInvitation", "security": [{ "ownerSession": [] }], "parameters": [{ "$ref": "#/components/parameters/Uuid" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "description": "Owner confirmed the fingerprint shown by the connecting agent." }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/api/v1/owners/me/credential-invitations/{id}/reject": {
+      "post": { "tags": ["identity"], "operationId": "rejectCredentialInvitation", "security": [{ "ownerSession": [] }], "parameters": [{ "$ref": "#/components/parameters/Uuid" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "description": "A presented invitation can be presented again." }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/api/v1/owners/me/credential-invitations/{id}/revoke": {
+      "post": { "tags": ["identity"], "operationId": "revokeCredentialInvitation", "security": [{ "ownerSession": [] }], "parameters": [{ "$ref": "#/components/parameters/Uuid" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "description": "Invitation revoked before activation." }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/api/v1/credential-invitations/{id}/present": {
+      "post": { "tags": ["identity"], "operationId": "presentCredentialInvitation", "parameters": [{ "$ref": "#/components/parameters/Uuid" }], "responses": { "200": { "description": "Invitation is waiting for the owner to confirm the binding fingerprint. No credential is returned." }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
+    "/api/v1/credential-invitations/{id}/activate": {
+      "post": { "tags": ["identity"], "operationId": "activateCredentialInvitation", "parameters": [{ "$ref": "#/components/parameters/Uuid" }], "responses": { "201": { "description": "Credential issued once to the holder of the binding secret." }, "default": { "$ref": "#/components/responses/Problem" } } }
+    },
     "/api/v1/owners/me/publication": {
       "post": { "tags": ["identity"], "operationId": "setPublication", "security": [{ "ownerSession": [] }], "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "description": "Owner publication grant changed." }, "default": { "$ref": "#/components/responses/Problem" } } }
     },

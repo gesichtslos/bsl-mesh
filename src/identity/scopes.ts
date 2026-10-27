@@ -19,18 +19,30 @@ export function isWriteScope(value: string): value is WriteScope {
 }
 
 export function resolveScopes(input: readonly string[] | undefined): Scope[] {
+  return collectScopes(input, ALL_SCOPES, true);
+}
+
+export function resolveInvitationScopes(input: readonly string[]): Scope[] {
+  const allowed = ALL_SCOPES.filter((scope) => scope !== 'workspaces:read' && scope !== 'workspaces:write');
+  return collectScopes(input, allowed, false);
+}
+
+function collectScopes(input: readonly string[] | undefined, allowed: readonly Scope[], useDefault: boolean): Scope[] {
   if (input === undefined) {
+    if (!useDefault) {
+      throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
+    }
     return [...DEFAULT_READ_SCOPES];
   }
-  if (input.length === 0 || input.length > ALL_SCOPES.length) {
+  if (input.length === 0 || input.length > allowed.length) {
     throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
   }
   const scopes: Scope[] = [];
   for (const item of input) {
-    if (!isScope(item) || scopes.includes(item)) {
+    if (!(allowed as readonly string[]).includes(item) || scopes.includes(item as Scope)) {
       throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
     }
-    scopes.push(item);
+    scopes.push(item as Scope);
   }
   return scopes;
 }

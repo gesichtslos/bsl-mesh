@@ -2,12 +2,13 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const TOKEN_BYTES = 32;
 
-export type TokenKind = 'owner' | 'agent' | 'magic';
+export type TokenKind = 'owner' | 'agent' | 'magic' | 'invite';
 
 const PREFIX: Record<TokenKind, string> = {
   owner: 'bslm_own_',
   agent: 'bslm_agt_',
   magic: 'bslm_ml_',
+  invite: 'bslm_inv_',
 };
 
 export function generateToken(kind: TokenKind): string {

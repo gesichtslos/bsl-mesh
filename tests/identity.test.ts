@@ -9,7 +9,7 @@ import { auditDetail } from '../src/identity/audit.js';
 import { uuidV7 } from '../src/identity/ids.js';
 import { createOneTimeCodeDelivery, describeIdentity, magicLinkRoute } from '../src/identity/provider.js';
 import { retryAfterSeconds } from '../src/identity/rate-limit.js';
-import { resolveScopes } from '../src/identity/scopes.js';
+import { resolveInvitationScopes, resolveScopes } from '../src/identity/scopes.js';
 import { IdentityService } from '../src/identity/service.js';
 import { hashToken } from '../src/identity/tokens.js';
 
@@ -52,11 +52,16 @@ describe('identity primitives', () => {
     expect(resolveScopes(['cases:write'])).toEqual(['cases:write']);
     expect(() => resolveScopes(['cases:write', 'cases:write'])).toThrow(/validation/i);
     expect(() => resolveScopes(['owner:write'])).toThrow(/validation/i);
+    expect(resolveInvitationScopes(['handoff:read', 'handoff:write'])).toEqual(['handoff:read', 'handoff:write']);
+    expect(() => resolveInvitationScopes(['workspaces:write'])).toThrow(/validation/i);
+    expect(() => resolveInvitationScopes([])).toThrow(/validation/i);
   });
 
   test('drops secret-shaped fields from audit details', () => {
     expect(auditDetail({
       token: 'bslm_agt_example-token-value',
+      invite_code: 'bslm_inv_example-token-value',
+      binding: 'binding-secret',
       magic_link_token: 'bslm_ml_example-token-value',
       scopes: ['cases:write'],
       reason: 'scope',
