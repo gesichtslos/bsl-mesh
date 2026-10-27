@@ -6,6 +6,7 @@ import { IDENTITY_DETAIL, IdentityError } from '../identity/errors.js';
 import { uuidV7 } from '../identity/ids.js';
 import type { AgentPrincipal, IdentityService } from '../identity/service.js';
 import { hashRequest, sameDigest } from '../identity/tokens.js';
+import { workspaceDuties } from './duties.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GRANTS = ['read', 'contribute', 'administer'] as const;
@@ -227,6 +228,7 @@ export class WorkspaceService {
         subject_agent_id: event.subject_agent_id,
         created_at: event.created_at.toISOString(),
       })),
+      duties: workspaceDuties(row.id),
     };
   }
 

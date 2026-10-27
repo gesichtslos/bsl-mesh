@@ -9,6 +9,7 @@ import { loadConfig, type AppConfig } from '../src/config.js';
 import { migrate } from '../src/db/migrate.js';
 import { createPool } from '../src/db/pool.js';
 import { resetDisposableSchema, type SqlClient } from '../src/db/test-database.js';
+import { workspaceDuties } from '../src/workspaces/duties.js';
 
 const EXTENSION = 'https://bslmesh.ru/a2a/extensions/handoff/v1';
 const SKILL = {
@@ -126,6 +127,7 @@ test('a closed workspace shares one handoff task and drops a removed member', as
   expect(created.statusCode).toBe(201);
   const workspaceId = (created.json() as { id: string; state: string }).id;
   expect((created.json() as { state: string }).state).toBe('forming');
+  expect(created.json()).toMatchObject({ duties: workspaceDuties(workspaceId) });
   const hidden = await app.inject({
     method: 'GET',
     url: `/api/v1/workspaces/${workspaceId}`,
@@ -146,6 +148,7 @@ test('a closed workspace shares one handoff task and drops a removed member', as
   });
   expect(preview.statusCode).toBe(200);
   expect(JSON.stringify(preview.json())).not.toContain('events');
+  expect(preview.json()).not.toHaveProperty('duties');
   const joined = await app.inject({
     method: 'POST',
     url: `/api/v1/workspaces/${workspaceId}/membership`,
@@ -153,6 +156,7 @@ test('a closed workspace shares one handoff task and drops a removed member', as
   });
   expect(joined.statusCode).toBe(200);
   expect((joined.json() as { state: string }).state).toBe('active');
+  expect(joined.json()).toMatchObject({ duties: workspaceDuties(workspaceId) });
   for (const agent of [windows, linux, third]) {
     const profile = await app.inject({
       method: 'POST',
@@ -248,6 +252,12 @@ test('a closed workspace shares one handoff task and drops a removed member', as
     headers: { authorization: `Bearer ${windows.token}`, 'idempotency-key': key() },
   });
   expect(removed.statusCode).toBe(200);
+  const removedSnapshot = await app.inject({
+    method: 'GET',
+    url: `/api/v1/workspaces/${workspaceId}`,
+    headers: { authorization: `Bearer ${third.token}` },
+  });
+  expect(removedSnapshot.statusCode).toBe(404);
   const after = await app.inject({
     method: 'GET',
     url: `/api/v1/handoff/tasks/${(clarification.json() as { id: string }).id}`,
@@ -261,4 +271,56 @@ test('a closed workspace shares one handoff task and drops a removed member', as
   });
   expect(stillThere.statusCode).toBe(200);
   expect(JSON.stringify(stillThere.json())).toContain('Платформа 1С не запускалась');
+});
+
+test('workspace duties stay behind workspace scopes and an active membership', async () => {
+  const owner = await sessionFor(app, 'space-duties@example.test');
+  const member = await agentFor(app, owner, 'Duties member');
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/v1/workspaces',
+    headers: { authorization: `Bearer ${member.token}`, 'idempotency-key': key() },
+    payload: { goal: 'Проверить, что правила опроса видит только участник.' },
+  });
+  expect(created.statusCode).toBe(201);
+  const workspaceId = (created.json() as { id: string }).id;
+  const mailOnly = await app.inject({
+    method: 'POST',
+    url: '/api/v1/owners/me/credentials',
+    headers: { authorization: `Bearer ${owner}`, 'idempotency-key': key() },
+    payload: {
+      agent_id: member.id,
+      scopes: ['handoff:read', 'handoff:write'],
+      ttl_seconds: 3600,
+    },
+  });
+  const mailToken = (mailOnly.json() as { token?: string }).token;
+  if (mailToken === undefined) {
+    throw new Error('Handoff credential was not issued.');
+  }
+  const deniedRead = await app.inject({
+    method: 'GET',
+    url: `/api/v1/workspaces/${workspaceId}`,
+    headers: { authorization: `Bearer ${mailToken}` },
+  });
+  expect(deniedRead.statusCode).toBe(403);
+  const deniedCreate = await app.inject({
+    method: 'POST',
+    url: '/api/v1/workspaces',
+    headers: { authorization: `Bearer ${mailToken}`, 'idempotency-key': key() },
+    payload: { goal: 'Этот credential пространство не создаёт.' },
+  });
+  expect(deniedCreate.statusCode).toBe(403);
+  const anonymous = await app.inject({
+    method: 'GET',
+    url: `/api/v1/workspaces/${workspaceId}`,
+  });
+  expect(anonymous.statusCode).toBe(401);
+  const snapshot = await app.inject({
+    method: 'GET',
+    url: `/api/v1/workspaces/${workspaceId}`,
+    headers: { authorization: `Bearer ${member.token}` },
+  });
+  expect(snapshot.statusCode).toBe(200);
+  expect(snapshot.json()).toMatchObject({ duties: workspaceDuties(workspaceId) });
 });
