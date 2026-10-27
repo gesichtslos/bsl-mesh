@@ -112,6 +112,8 @@ jobs:
           docker compose --env-file "${RUNNER_TEMP}/production.env" -f compose.production.yaml config --format json > "${RUNNER_TEMP}/production-compose.json"
           docker run --rm -v "$PWD/Caddyfile.production:/etc/caddy/Caddyfile:ro" -e CADDY_ACME_EMAIL=tls-notices@example.test caddy:2.11.7 caddy adapt --config /etc/caddy/Caddyfile --pretty > "${RUNNER_TEMP}/caddy.json"
           CHECK_POSTGRES_PASSWORD=ci-disposable node scripts/check-production-config.mjs "${RUNNER_TEMP}/production-compose.json" "${RUNNER_TEMP}/caddy.json"
+          HANDOFF_ENABLED=enabled docker compose --env-file "${RUNNER_TEMP}/production.env" -f compose.production.yaml config --format json > "${RUNNER_TEMP}/production-compose-handoff.json"
+          CHECK_POSTGRES_PASSWORD=ci-disposable CHECK_HANDOFF_ENABLED=enabled node scripts/check-production-config.mjs "${RUNNER_TEMP}/production-compose-handoff.json" "${RUNNER_TEMP}/caddy.json"
           bash scripts/production-backup.sh --self-test
           set +e
           bash scripts/production-backup.sh > "${RUNNER_TEMP}/backup-refusal.txt" 2>&1

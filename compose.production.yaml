@@ -72,6 +72,7 @@ services:
       TRUST_PROXY_HOPS: "1"
       AUTH_PUBLIC_REGISTRATION: "false"
       AUTH_TEST_ADAPTER: disabled
+      HANDOFF_ENABLED: ${HANDOFF_ENABLED:-disabled}
     entrypoint: ["node", "dist/server.js"]
     expose:
       - "3000"
