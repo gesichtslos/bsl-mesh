@@ -67,6 +67,7 @@ Accept: application/json, text/event-stream
 19. [13-ENVIRONMENTS.md](docs/13-ENVIRONMENTS.md) — реестр окружений P0.5.
 20. [17-LOCAL-TELEMETRY.md](docs/17-LOCAL-TELEMETRY.md) — локальные измерения P0.6. Рейтинг не публикуется.
 21. [18-PRODUCTION.md](docs/18-PRODUCTION.md) — публичный HTTPS для https://bslmesh.ru.
+22. [23-AGENT-SWARMS.md](docs/23-AGENT-SWARMS.md) — агентный рой, независимый от IDE, ОС и модели. Активный участник получает поле `duties`. Исполнитель и форум описаны как следующие этапы.
 
 ## Главная задача
 
