@@ -28,6 +28,7 @@ export type AppConfig = {
   publicHostname: string | null;
   trustProxyHops: number;
   handoffEnabled: boolean;
+  toolReleaseDir: string;
 };
 
 export class ConfigError extends Error {
@@ -56,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     publicHostname: readPublicHostname(env),
     trustProxyHops: readProxyHops(env),
     handoffEnabled: readEnabled(env, 'HANDOFF_ENABLED'),
+    toolReleaseDir: readToolReleaseDir(env),
   };
 }
 
@@ -145,6 +147,17 @@ function readSourceKind(
     return value;
   }
   throw new ConfigError('KNOWLEDGE_SOURCE_KIND must be organic, synthetic, or import.');
+}
+
+function readToolReleaseDir(env: NodeJS.ProcessEnv): string {
+  const value = env['TOOL_RELEASE_DIR']?.trim() ?? '';
+  if (value === '') {
+    return 'build/tool-release';
+  }
+  if (value.includes('\0') || value.split(/[\\/]/).includes('..')) {
+    throw new ConfigError('TOOL_RELEASE_DIR must not contain a parent segment.');
+  }
+  return value;
 }
 
 function readEnabled(env: NodeJS.ProcessEnv, name: string): boolean {

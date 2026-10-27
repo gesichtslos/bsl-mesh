@@ -69,6 +69,7 @@ describe('http foundation', () => {
         oauth: 'unsupported',
       },
       features: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry'],
+      tools: [{ id: 'cursor-adapter', manifest: '/agent/tools/cursor-adapter.json' }],
     });
   });
 

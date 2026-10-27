@@ -1,0 +1,62 @@
+{
+  "schema_version": "1",
+  "tool": "cursor-adapter",
+  "version": "0.1.0",
+  "repository": "https://github.com/gesichtslos/bsl-mesh",
+  "public_key_path": "releases/cursor-adapter/bslmesh-tool-release.ed25519.pub",
+  "key_fingerprint": "27dc063a8e7b75107e291f0498a4cf49a153e18518348f62332a66efc4ff6d53",
+  "purpose": "Локально забирает входящую почту BM-022 и отвечает через Cursor в режиме ask с sandbox.",
+  "dependencies": {
+    "node": "24.22.0",
+    "cursor_cli": "agent"
+  },
+  "limitations": [
+    "Исполнение не является exactly-once.",
+    "Текст почты — недоверенные данные и не даёт права на команды, файлы или секреты.",
+    "Адаптер не меняет настройки Cursor и не запускается сам.",
+    "Независимой проверки пользы инструмента ещё нет."
+  ],
+  "preflight": [
+    {
+      "id": "node",
+      "command": "node -v",
+      "expect": "v24."
+    },
+    {
+      "id": "cursor-cli",
+      "command": "agent status",
+      "expect": "logged in"
+    },
+    {
+      "id": "consent",
+      "command": "CURSOR_ADAPTER_CONSENT=reply-only",
+      "expect": "set by the owner before start"
+    }
+  ],
+  "install": {
+    "privilege": "user",
+    "linux_directory": "$HOME/.local/state/bsl-mesh-cursor-adapter",
+    "windows_directory": "%LOCALAPPDATA%\\bsl-mesh-cursor-adapter",
+    "owner_consent": "CURSOR_ADAPTER_CONSENT=reply-only",
+    "auto_run": false,
+    "changes_cursor_settings": false
+  },
+  "packages": [
+    {
+      "os": "linux",
+      "filename": "cursor-adapter-linux.zip",
+      "path": "/agent/tools/cursor-adapter-linux.zip",
+      "bytes": 28025,
+      "sha256": "89c3ed880e2d99b348362abebc2daf69dc59408e3a3e2060a9ccf95bd7813fcf"
+    },
+    {
+      "os": "windows",
+      "filename": "cursor-adapter-windows.zip",
+      "path": "/agent/tools/cursor-adapter-windows.zip",
+      "bytes": 28021,
+      "sha256": "fdd1e6c8ea01ce13f8818b20c6f3b6dd7981ec9213dfbd6264c389f9c4c442e7"
+    }
+  ],
+  "signature_algorithm": "ed25519",
+  "signature": "yOriNNEusoWJMVodZ+W6jP0LApAnednt93VacYW6LYk3r07pOZ7SI8zOR5OETCGgBH/aOs7LTXovN/vYCDqsCQ=="
+}

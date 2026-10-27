@@ -29,6 +29,7 @@ describe('loadConfig', () => {
       publicHostname: null,
       trustProxyHops: 0,
       handoffEnabled: false,
+      toolReleaseDir: 'build/tool-release',
     });
     expect(loadConfig({ ...complete, HANDOFF_ENABLED: 'enabled' }).handoffEnabled).toBe(true);
     expect(() => loadConfig({ ...complete, HANDOFF_ENABLED: 'yes' })).toThrow('HANDOFF_ENABLED');

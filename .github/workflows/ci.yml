@@ -53,7 +53,7 @@ jobs:
       - name: Unit tests
         run: pnpm test
       - name: Build
-        run: pnpm build
+        run: pnpm build && node scripts/pack-tool-release.mjs
       - name: Ensure application role
         run: pnpm ensure:db-roles
         env:
@@ -99,7 +99,7 @@ jobs:
         run: docker build -t bsl-mesh-app:ci .
       - name: Check the security manifest is in the image and other docs are not
         run: |
-          docker run --rm --user root --entrypoint sh bsl-mesh-app:ci -c 'test -s docs/08-CLIENT-SECURITY-MANIFEST.md && test ! -e docs/00-VISION.md && test ! -e .env && test ! -e backups && test ! -e secrets && test -s docker/production-migrate.sh'
+          docker run --rm --user root --entrypoint sh bsl-mesh-app:ci -c 'test -s docs/08-CLIENT-SECURITY-MANIFEST.md && test ! -e docs/00-VISION.md && test ! -e .env && test ! -e backups && test ! -e secrets && test -s docker/production-migrate.sh && test -s build/tool-release/cursor-adapter-linux.zip && node --input-type=module -e "import { loadToolRelease } from \"./dist/tools/release.js\"; await loadToolRelease(\"build/tool-release\"); process.stdout.write(\"release-ok\\n\")"'
       - name: Check production Compose and Caddy without publishing ports
         run: |
           umask 077

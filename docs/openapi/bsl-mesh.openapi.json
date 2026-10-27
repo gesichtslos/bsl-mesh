@@ -113,7 +113,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["api_version", "mcp", "features"],
+                  "required": ["api_version", "mcp", "features", "tools"],
                   "properties": {
                     "api_version": { "const": "0.1.0" },
                     "mcp": {
@@ -128,7 +128,19 @@
                         "oauth": { "const": "unsupported" }
                       }
                     },
-                    "features": { "type": "array", "items": { "type": "string", "enum": ["health", "identity", "knowledge", "mcp", "starter", "telemetry", "handoff"] }, "description": "handoff is present only when HANDOFF_ENABLED=enabled." }
+                    "features": { "type": "array", "items": { "type": "string", "enum": ["health", "identity", "knowledge", "mcp", "starter", "telemetry", "handoff"] }, "description": "handoff is present only when HANDOFF_ENABLED=enabled." },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "manifest"],
+                        "properties": {
+                          "id": { "const": "cursor-adapter" },
+                          "manifest": { "const": "/agent/tools/cursor-adapter.json" }
+                        }
+                      }
+                    }
                   }
                 }
               }

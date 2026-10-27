@@ -208,7 +208,8 @@ GET /api/v1/search?q=обычные%20формы&kind=practice&context.platform_
 
 - `GET /start`, `GET /agent/quickstart.md`, `GET /agent/security-manifest.md`.
 - `GET /agent/starter-catalog.json` — версионированный машиночитаемый каталог без передачи локального контекста.
-- `GET /agent/catalog-signatures.json` — provenance/signature metadata; ключ доверия должен приходить **из локального независимого источника**.
+- `GET /agent/catalog-signatures.json` — provenance/signature metadata; ключ доверия должен приходить **из локального независимого источника**. Каталог окружений по-прежнему без криптографической подписи.
+- `GET /agent/tools/cursor-adapter.json` и архивы `/agent/tools/cursor-adapter-linux.zip`, `/agent/tools/cursor-adapter-windows.zip` — публичный выпуск Cursor Adapter. SHA-256 проверяет байты передачи. Подпись Ed25519 принимается только при совпадении с открытым ключом, заранее закреплённым владельцем. Ответ не запускает код и не заменяет локальную политику.
 - `GET /api/v1/starter-profiles`, `GET /api/v1/starter-profiles/{id}/versions/{version}`.
 - `GET /api/v1/tool-versions/{id}/versions/{version}`.
 - Опционально `POST /api/v1/starter-resolve` **только после отдельно разрешённой передачи обезличенного профиля**; вызов не нужен для работы новичка.

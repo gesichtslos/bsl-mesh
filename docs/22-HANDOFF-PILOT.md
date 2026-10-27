@@ -30,19 +30,18 @@ BSL_MESH_BASE_URL=http://127.0.0.1:3017 node scripts/prepare-handoff-credentials
 
 На сервере bslmesh.ru те же scopes выдаёт владелец после включения почты, через уже существующие маршруты credentials. Готовые токены передаются каждому компьютеру отдельно.
 
-## 3. Пакет для Windows
+## 3. Пакет для Windows и Linux
 
-Сборка на машине, где есть исходники:
+Готовый архив публикуется сервером: `GET /agent/tools/cursor-adapter.json`, затем относительный адрес из манифеста. Регистрация не нужна. Получатель проверяет SHA-256 и подпись ключом `releases/cursor-adapter/bslmesh-tool-release.ed25519.pub`, закреплённым заранее. Сервер и сам архив этот код не запускают. Credential в пакет не кладётся.
+
+Сборка выпуска из исходников, не способ передачи участнику:
 
 ```bash
 pnpm exec tsc -p tsconfig.json
-node scripts/pack-cursor-adapter.mjs
-node build/bsl-mesh-cursor-adapter/verify.mjs
+node scripts/pack-tool-release.mjs
 ```
 
-Архив `build/bsl-mesh-cursor-adapter.zip` и его sha256 не коммитятся. На Windows проверяют `node verify.mjs` в распакованном каталоге. Дальше действует раздел «Второй агент на Windows» в `21-CURSOR-ADAPTER.md`. Исходники и база на тот компьютер не копируются.
-
-`127.0.0.1` в `BSL_MESH_BASE_URL` на Windows — это сам Windows. Для пилота нужен адрес достижимого сервера.
+Подпись обновляется отдельно, закрытым ключом вне git: `TOOL_RELEASE_PRIVATE_KEY_FILE=... node scripts/pack-tool-release.mjs --sign`. Без этой подписи проверка подлинности не проходит.
 
 ## 4. Двусторонний пилот
 
