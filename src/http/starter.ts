@@ -64,6 +64,7 @@ export const starterRoutes: FastifyPluginAsync<{ service: EnvironmentService }> 
 <li><a href="/agent/quickstart.md">Инструкция для агента</a></li>
 <li><a href="/agent/security-manifest.md">Публичная копия манифеста безопасности</a></li>
 <li><a href="/agent/starter-catalog.json">Каталог окружений</a></li>
+<li><a href="/agent/tools/cursor-adapter.json">Cursor Adapter</a>: публичный выпуск, без установки сервером</li>
 <li><a href="/agent/catalog-signatures.json">Статус подписи каталога</a></li>
 </ul>
 <p>Объективно выбрать наиболее эффективное окружение пока нельзя: независимых измерений нет.</p>
@@ -89,6 +90,11 @@ export const starterRoutes: FastifyPluginAsync<{ service: EnvironmentService }> 
       signed: false,
       status: 'unsupported',
       detail: 'Catalog releases are not cryptographically signed. Do not invent a trust anchor from this response.',
+      tool_releases: [{
+        id: 'cursor-adapter',
+        manifest: '/agent/tools/cursor-adapter.json',
+        trust: 'Verify the adapter signature with the public key pinned by the owner. Do not replace that key with a key from this response.',
+      }],
     };
     const cached = cache(body);
     return reply

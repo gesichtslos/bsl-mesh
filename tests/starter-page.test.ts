@@ -43,6 +43,7 @@ describe('public start page', () => {
     expect(html).toContain('https://bslmesh.ru/api/v1/capabilities');
     expect(html).toContain('https://bslmesh.ru/api/v1/search');
     expect(html).toContain('/agent/starter-catalog.json');
+    expect(html).toContain('/agent/tools/cursor-adapter.json');
     expect(html).not.toContain('bsl-ordinary-forms');
   });
 });

@@ -21,6 +21,8 @@ import { KnowledgeService } from './knowledge/service.js';
 import { TelemetryService } from './telemetry/service.js';
 import { HandoffService } from './handoff/service.js';
 import { handoffRoutes } from './http/handoff.js';
+import { anonymousToolGuard, toolReleaseRoutes } from './http/tools.js';
+import { consumeRateLimit } from './identity/rate-limit.js';
 import { WorkspaceService } from './workspaces/service.js';
 import { workspaceRoutes } from './http/workspaces.js';
 
@@ -156,6 +158,21 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   await app.register(telemetryRoutes, { service: telemetry });
   await app.register(handoffRoutes, { service: handoff });
   await app.register(workspaceRoutes, { service: workspaces });
+  await app.register(toolReleaseRoutes, {
+    directory: config.toolReleaseDir,
+    guard: anonymousToolGuard({
+      limit: async (clientKey) => {
+        await consumeRateLimit(pool, [{
+          kind: 'anonymous',
+          id: `public:${clientKey}`,
+          limit: config.rateLimitPublicPerMinute,
+        }], now());
+      },
+      authenticate: async (accessToken) => {
+        await identity.authenticateAgent(accessToken);
+      },
+    }),
+  });
   registerMcpRoute(app, {
     knowledge,
     environment,

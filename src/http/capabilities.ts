@@ -19,13 +19,14 @@ export function capabilityDocument(handoffEnabled = false) {
       oauth: 'unsupported' as const,
     },
     features: handoffEnabled ? [...features, 'handoff'] : [...features],
+    tools: [{ id: 'cursor-adapter', manifest: '/agent/tools/cursor-adapter.json' }],
   };
 }
 
 const capabilitiesSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['api_version', 'mcp', 'features'],
+  required: ['api_version', 'mcp', 'features', 'tools'],
   properties: {
     api_version: { type: 'string', const: API_VERSION },
     mcp: {
@@ -44,6 +45,18 @@ const capabilitiesSchema = {
     features: {
       type: 'array',
       items: { type: 'string', enum: ['health', 'identity', 'knowledge', 'mcp', 'starter', 'telemetry', 'handoff'] },
+    },
+    tools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'manifest'],
+        properties: {
+          id: { type: 'string' },
+          manifest: { type: 'string' },
+        },
+      },
     },
   },
 } as const;
