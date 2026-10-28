@@ -9,16 +9,30 @@ export type TaskRecord = {
   updatedAt: string;
 };
 
+export type OutgoingPhase = 'seen' | 'running' | 'processed' | 'uncertain';
+
+export type OutgoingRecord = {
+  phase: OutgoingPhase;
+  state: string;
+  handledState: string | null;
+  idempotencyKey: string | null;
+  updatedAt: string;
+};
+
 export type ExecutorState = {
   executorId: string;
   tasks: Record<string, TaskRecord>;
+  outgoing?: Record<string, OutgoingRecord>;
 };
 
 export function loadState(file: string, executorId: string): ExecutorState {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as ExecutorState;
-    if (parsed.executorId !== executorId || parsed.tasks === undefined || parsed.tasks === null || typeof parsed.tasks !== 'object') {
+    if (parsed.executorId !== executorId || parsed.tasks === undefined || parsed.tasks === null || typeof parsed.tasks !== 'object' || Array.isArray(parsed.tasks)) {
+      throw new Error('state mismatch');
+    }
+    if (parsed.outgoing !== undefined && (parsed.outgoing === null || typeof parsed.outgoing !== 'object' || Array.isArray(parsed.outgoing))) {
       throw new Error('state mismatch');
     }
     return parsed;
@@ -42,6 +56,16 @@ export function saveState(file: string, state: ExecutorState): void {
 
 export function mark(file: string, state: ExecutorState, taskId: string, record: TaskRecord): void {
   state.tasks[taskId] = record;
+  saveState(file, state);
+}
+
+export function outgoingMap(state: ExecutorState): Record<string, OutgoingRecord> {
+  state.outgoing ??= {};
+  return state.outgoing;
+}
+
+export function markOutgoing(file: string, state: ExecutorState, taskId: string, record: OutgoingRecord): void {
+  outgoingMap(state)[taskId] = record;
   saveState(file, state);
 }
 

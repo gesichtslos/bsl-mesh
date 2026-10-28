@@ -23,7 +23,9 @@ function mailbox(tasks: WaitingTask[], claimToken = executorId): MailboxClient &
     claims: 0,
     published: [],
     listSubmitted: () => Promise.resolve(tasks),
+    listRequester: () => Promise.resolve([]),
     read: () => Promise.resolve({ text: 'work item', state: 'TASK_STATE_WORKING', claimToken } satisfies TaskBody),
+    readOutcome: () => Promise.resolve({ state: 'TASK_STATE_SUBMITTED', timestamp: '', artifact: '' }),
     claim: function claim() {
       this.claims += 1;
       return Promise.resolve();

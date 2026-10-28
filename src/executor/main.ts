@@ -6,6 +6,7 @@ import { parseCommand } from './command.js';
 import { runCycle } from './cycle.js';
 import { acquireLock, loadState } from './journal.js';
 import { Mailbox, MailboxError } from './mailbox.js';
+import { runWatchCycle } from './watch.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -60,7 +61,13 @@ async function main(): Promise<void> {
     if (contextId !== undefined && !UUID.test(contextId)) {
       throw new Error('BSL_MESH_WORKSPACE_ID must be a UUID.');
     }
-    const argv = parseCommand(required('BSL_MESH_EXECUTOR_COMMAND'));
+    const incoming = process.env['BSL_MESH_EXECUTOR_COMMAND']?.trim() ?? '';
+    const watching = process.env['BSL_MESH_EXECUTOR_RESULT_COMMAND']?.trim() ?? '';
+    if (incoming === '' && watching === '') {
+      throw new Error('BSL_MESH_EXECUTOR_COMMAND or BSL_MESH_EXECUTOR_RESULT_COMMAND is required.');
+    }
+    const argv = incoming === '' ? undefined : parseCommand(incoming);
+    const resultArgv = watching === '' ? undefined : parseCommand(watching);
     const mailbox = new Mailbox(required('BSL_MESH_BASE_URL').replace(/\/$/, ''), credential(required('BSL_MESH_CREDENTIAL_FILE')));
     const interval = Math.max(200, Number(process.env['BSL_MESH_EXECUTOR_INTERVAL_MS'] ?? '5000'));
     const timeoutMs = Math.max(1000, Number(process.env['BSL_MESH_EXECUTOR_COMMAND_TIMEOUT_MS'] ?? '120000'));
@@ -72,20 +79,41 @@ async function main(): Promise<void> {
         break;
       }
       try {
-        const result = await runCycle({
-          mailbox,
-          state,
-          stateFile,
-          argv,
-          contextId,
-          timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 120_000,
-          now: () => new Date(),
-          log,
-        });
-        log(`cycle published=${result.published} uncertain=${result.uncertain} ran=${result.ran}`);
-        if (result.stopped) {
-          process.exitCode = 1;
-          break;
+        const now = () => new Date();
+        const timeout = Number.isFinite(timeoutMs) ? timeoutMs : 120_000;
+        if (argv !== undefined) {
+          const result = await runCycle({
+            mailbox,
+            state,
+            stateFile,
+            argv,
+            contextId,
+            timeoutMs: timeout,
+            now,
+            log,
+          });
+          log(`cycle published=${result.published} uncertain=${result.uncertain} ran=${result.ran}`);
+          if (result.stopped) {
+            process.exitCode = 1;
+            break;
+          }
+        }
+        if (resultArgv !== undefined) {
+          const watched = await runWatchCycle({
+            mailbox,
+            state,
+            stateFile,
+            argv: resultArgv,
+            contextId,
+            timeoutMs: timeout,
+            now,
+            log,
+          });
+          log(`results noticed=${watched.noticed} uncertain=${watched.uncertain} ran=${watched.ran}`);
+          if (watched.stopped) {
+            process.exitCode = 1;
+            break;
+          }
         }
       } catch (error) {
         if (error instanceof MailboxError && error.retryable) {
