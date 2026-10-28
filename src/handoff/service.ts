@@ -8,7 +8,9 @@ import type { AgentPrincipal, IdentityService } from '../identity/service.js';
 import { hashRequest, sameDigest } from '../identity/tokens.js';
 import { assertWorkspaceRead, assertWorkspaceSend, WORKSPACE_TASK_FILTER } from '../workspaces/access.js';
 import {
+  concealedUntil,
   HANDOFF_EXTENSION,
+  parseVisibleAt,
   type EscalationReason,
   type Part,
   type SendDraft,
@@ -211,6 +213,9 @@ export class HandoffService {
     return this.transaction(async (client) => {
       const task = await this.visibleTask(client, input.taskId, principal.agentId, true);
       await assertWorkspaceRead(client, task.context_id, principal.agentId);
+      if (concealedUntil(task.metadata, principal.agentId, task.requester_agent_id, this.now())) {
+        throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+      }
       if (task.recipient_agent_id === principal.agentId && task.metadata['receivedAt'] === undefined) {
         const receivedAt = this.now().toISOString();
         await client.query(
@@ -255,10 +260,15 @@ export class HandoffService {
            OR ($4 = 'requester' AND requester_agent_id = $1)
          ))
          AND ($5::text IS NULL OR state = $5)
+         AND (
+           requester_agent_id = $1
+           OR metadata ->> 'visibleAt' IS NULL
+           OR (metadata ->> 'visibleAt')::timestamptz <= $6::timestamptz
+         )
          ${WORKSPACE_TASK_FILTER}
        ORDER BY updated_at DESC, id DESC
        LIMIT $3`,
-      [principal.agentId, input.contextId ?? null, input.pageSize, input.role ?? null, input.state ?? null],
+      [principal.agentId, input.contextId ?? null, input.pageSize, input.role ?? null, input.state ?? null, this.now().toISOString()],
     );
     const tasks = [];
     for (const row of rows.rows) {
@@ -338,7 +348,10 @@ export class HandoffService {
     const taskId = uuidV7(current);
     const contextId = draft.message.contextId ?? uuidV7(new Date(current.getTime() + 1));
     const state: TaskState = recipient.availability === 'paused' ? 'TASK_STATE_REJECTED' : 'TASK_STATE_SUBMITTED';
-    const metadata = { sourceKind: this.config.knowledgeSourceKind };
+    const metadata: Record<string, unknown> = { sourceKind: this.config.knowledgeSourceKind };
+    if (draft.directive.visibleAt !== undefined) {
+      metadata['visibleAt'] = parseVisibleAt(draft.directive.visibleAt);
+    }
     await client.query(
       `INSERT INTO handoff_tasks (
          id, context_id, requester_agent_id, requester_owner_id, recipient_agent_id, recipient_owner_id,
@@ -373,8 +386,14 @@ export class HandoffService {
     if (taskId === undefined) {
       throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
     }
+    if (draft.directive.visibleAt !== undefined) {
+      throw new IdentityError(422, 'Unprocessable Entity', IDENTITY_DETAIL.validation);
+    }
     const task = await this.visibleTask(client, taskId, principal.agentId, true);
     await assertWorkspaceRead(client, task.context_id, principal.agentId);
+    if (concealedUntil(task.metadata, principal.agentId, task.requester_agent_id, this.now())) {
+      throw new IdentityError(404, 'Not Found', IDENTITY_DETAIL.notFound);
+    }
     if (principal.agentId === task.recipient_agent_id && draft.directive.state !== undefined) {
       await assertWorkspaceSend(client, task.context_id, principal.agentId, task.requester_agent_id);
     }
