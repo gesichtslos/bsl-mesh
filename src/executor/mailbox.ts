@@ -18,15 +18,24 @@ export type TaskBody = {
   claimToken: string | null;
 };
 
+export type TaskOutcome = {
+  state: string;
+  timestamp: string;
+  artifact: string;
+};
+
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 const EXTENSION = 'https://bslmesh.ru/a2a/extensions/handoff/v1';
 
 export type MailboxClient = {
   listSubmitted(contextId: string | undefined): Promise<WaitingTask[]>;
+  listRequester(contextId: string | undefined, state: string): Promise<WaitingTask[]>;
   read(taskId: string): Promise<TaskBody>;
+  readOutcome(taskId: string): Promise<TaskOutcome>;
   claim(taskId: string, claimToken: string): Promise<void>;
   publish(taskId: string, text: string): Promise<void>;
+  sendPrepared(idempotencyKey: string, body: Record<string, unknown>): Promise<string>;
 };
 
 export class Mailbox implements MailboxClient {
@@ -57,6 +66,27 @@ export class Mailbox implements MailboxClient {
     ));
   }
 
+  async listRequester(contextId: string | undefined, state: string): Promise<WaitingTask[]> {
+    const query = new URLSearchParams({
+      role: 'requester',
+      state,
+      historyLength: '0',
+      pageSize: '20',
+    });
+    if (contextId !== undefined) {
+      query.set('contextId', contextId);
+    }
+    const body = await this.request<{ tasks?: Array<{ id?: string; status?: { state?: string } }>; nextPageToken?: unknown }>(
+      `/api/v1/handoff/tasks?${query.toString()}`,
+      { method: 'GET' },
+    );
+    return (body.tasks ?? []).flatMap((task) => (
+      typeof task.id === 'string' && task.status?.state === state
+        ? [{ id: task.id }]
+        : []
+    ));
+  }
+
   async read(taskId: string): Promise<TaskBody> {
     const body = await this.request<{
       status?: { state?: string };
@@ -70,6 +100,23 @@ export class Mailbox implements MailboxClient {
       text,
       state: body.status?.state ?? '',
       claimToken: typeof claimToken === 'string' ? claimToken : null,
+    };
+  }
+
+  async readOutcome(taskId: string): Promise<TaskOutcome> {
+    const body = await this.request<{
+      status?: { state?: string; timestamp?: string };
+      artifacts?: Array<{ parts?: Array<{ text?: string }> }>;
+    }>(`/api/v1/handoff/tasks/${taskId}?historyLength=0`, { method: 'GET' });
+    const artifact = (body.artifacts ?? [])
+      .flatMap((item) => item.parts ?? [])
+      .map((part) => part.text ?? '')
+      .filter((text) => text !== '')
+      .join('\n');
+    return {
+      state: body.status?.state ?? '',
+      timestamp: body.status?.timestamp ?? '',
+      artifact,
     };
   }
 
@@ -89,6 +136,18 @@ export class Mailbox implements MailboxClient {
         metadata: { [EXTENSION]: { state: 'TASK_STATE_WORKING', claimToken } },
       },
     });
+  }
+
+  async sendPrepared(idempotencyKey: string, body: Record<string, unknown>): Promise<string> {
+    const response = await this.request<{ id?: string }>('/api/v1/handoff/messages', {
+      method: 'POST',
+      idempotencyKey,
+      body,
+    });
+    if (typeof response.id !== 'string' || response.id === '') {
+      throw new MailboxError(502, false);
+    }
+    return response.id;
   }
 
   async publish(taskId: string, text: string): Promise<void> {

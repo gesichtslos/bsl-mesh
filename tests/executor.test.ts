@@ -23,7 +23,9 @@ function mailbox(tasks: WaitingTask[], claimToken = executorId): MailboxClient &
     claims: 0,
     published: [],
     listSubmitted: () => Promise.resolve(tasks),
+    listRequester: () => Promise.resolve([]),
     read: () => Promise.resolve({ text: 'work item', state: 'TASK_STATE_WORKING', claimToken } satisfies TaskBody),
+    readOutcome: () => Promise.resolve({ state: 'TASK_STATE_SUBMITTED', timestamp: '', artifact: '' }),
     claim: function claim() {
       this.claims += 1;
       return Promise.resolve();
@@ -32,6 +34,7 @@ function mailbox(tasks: WaitingTask[], claimToken = executorId): MailboxClient &
       this.published.push(text);
       return Promise.resolve();
     },
+    sendPrepared: () => Promise.resolve('018f1000-0000-7000-8000-000000000099'),
   };
 }
 
