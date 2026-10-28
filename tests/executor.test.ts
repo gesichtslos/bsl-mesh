@@ -34,6 +34,7 @@ function mailbox(tasks: WaitingTask[], claimToken = executorId): MailboxClient &
       this.published.push(text);
       return Promise.resolve();
     },
+    sendPrepared: () => Promise.resolve('018f1000-0000-7000-8000-000000000099'),
   };
 }
 

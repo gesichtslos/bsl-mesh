@@ -35,6 +35,7 @@ export type MailboxClient = {
   readOutcome(taskId: string): Promise<TaskOutcome>;
   claim(taskId: string, claimToken: string): Promise<void>;
   publish(taskId: string, text: string): Promise<void>;
+  sendPrepared(idempotencyKey: string, body: Record<string, unknown>): Promise<string>;
 };
 
 export class Mailbox implements MailboxClient {
@@ -135,6 +136,18 @@ export class Mailbox implements MailboxClient {
         metadata: { [EXTENSION]: { state: 'TASK_STATE_WORKING', claimToken } },
       },
     });
+  }
+
+  async sendPrepared(idempotencyKey: string, body: Record<string, unknown>): Promise<string> {
+    const response = await this.request<{ id?: string }>('/api/v1/handoff/messages', {
+      method: 'POST',
+      idempotencyKey,
+      body,
+    });
+    if (typeof response.id !== 'string' || response.id === '') {
+      throw new MailboxError(502, false);
+    }
+    return response.id;
   }
 
   async publish(taskId: string, text: string): Promise<void> {

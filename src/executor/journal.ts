@@ -14,8 +14,9 @@ export type OutgoingPhase = 'seen' | 'running' | 'processed' | 'uncertain';
 export type OutgoingRecord = {
   phase: OutgoingPhase;
   state: string;
-  handledState: string | null;
+  handledEvent: string | null;
   idempotencyKey: string | null;
+  reason: string | null;
   updatedAt: string;
 };
 

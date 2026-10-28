@@ -9,6 +9,10 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 
 import { buildApp } from '../src/app.js';
+import { loadState } from '../src/executor/journal.js';
+import { Mailbox } from '../src/executor/mailbox.js';
+import { commitPlan, loadPlan, resultIdempotencyKey } from '../src/executor/outbox.js';
+import { runWatchCycle } from '../src/executor/watch.js';
 import { loadConfig, type AppConfig } from '../src/config.js';
 import { migrate } from '../src/db/migrate.js';
 import { createPool } from '../src/db/pool.js';
@@ -254,4 +258,116 @@ test('the orchestrator command receives a finished artifact once and does not wr
   expect(await historyCount(app, orchestrator.token, taskId)).toBe(before);
   const developerState = path.join(directory, 'developer-state', 'state.json');
   expect(() => readFileSync(developerState, 'utf8')).toThrow();
+});
+
+test('a send accepted before its task id is saved is restored by the same idempotency key', async () => {
+  const orchestrator = await agentFor(app, await sessionFor(app, 'replay-orchestrator@example.test'), 'Replay orchestrator');
+  const developer = await agentFor(app, await sessionFor(app, 'replay-developer@example.test'), 'Replay developer');
+  for (const agent of [orchestrator, developer]) {
+    const profile = await app.inject({
+      method: 'POST',
+      url: '/api/v1/handoff/profile',
+      headers: { authorization: `Bearer ${agent.token}`, 'idempotency-key': key() },
+      payload: { availability: 'accepting', skills: [SKILL] },
+    });
+    expect(profile.statusCode).toBe(201);
+  }
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/v1/workspaces',
+    headers: { authorization: `Bearer ${orchestrator.token}`, 'idempotency-key': key() },
+    payload: { goal: 'Восстановить отправленное поручение.' },
+  });
+  const workspaceId = (created.json() as { id: string }).id;
+  const invited = await app.inject({
+    method: 'POST',
+    url: `/api/v1/workspaces/${workspaceId}/invitations`,
+    headers: { authorization: `Bearer ${orchestrator.token}`, 'idempotency-key': key() },
+    payload: { agent_id: developer.id, grant: 'contribute' },
+  });
+  expect(invited.statusCode).toBe(201);
+  const joined = await app.inject({
+    method: 'POST',
+    url: `/api/v1/workspaces/${workspaceId}/membership`,
+    headers: { authorization: `Bearer ${developer.token}`, 'idempotency-key': key() },
+  });
+  expect(joined.statusCode).toBe(200);
+  const directory = mkdtempSync(path.join(tmpdir(), 'bslmesh-replay-'));
+  const outbox = path.join(directory, 'outbox.json');
+  const stateFile = path.join(directory, 'state.json');
+  const sourceId = '018f1000-0000-7000-8000-0000000000aa';
+  const stamp = '2026-10-28T15:00:00.000Z';
+  const identity = `${sourceId}|TASK_STATE_COMPLETED|${stamp}`;
+  const eventKey = resultIdempotencyKey(sourceId, 'TASK_STATE_COMPLETED', stamp);
+  const plan = commitPlan(outbox, identity, eventKey, [
+    { recipientAgentId: developer.id, contextId: workspaceId, text: 'Первое поручение.' },
+    { recipientAgentId: developer.id, contextId: workspaceId, text: 'Второе поручение.' },
+  ]);
+  const mailbox = new Mailbox(base, orchestrator.token);
+  const firstBody = plan.actions[0]?.body;
+  const firstKey = plan.actions[0]?.idempotencyKey;
+  if (firstBody === undefined || firstKey === undefined) {
+    throw new Error('The plan did not contain the first send.');
+  }
+  const accepted = await mailbox.sendPrepared(firstKey, firstBody);
+  expect(loadPlan(outbox, identity)?.actions[0]?.taskId).toBeNull();
+  const state = {
+    executorId: 'executor-0123456789abcdef',
+    tasks: {},
+    outgoing: {
+      [sourceId]: {
+        phase: 'running' as const,
+        state: 'TASK_STATE_COMPLETED',
+        handledEvent: identity,
+        idempotencyKey: eventKey,
+        reason: null,
+        updatedAt: stamp,
+      },
+    },
+  };
+  const restored = await runWatchCycle({
+    mailbox,
+    state,
+    stateFile,
+    outboxFile: outbox,
+    argv: [process.execPath, '-e', 'process.stdout.write("model")'],
+    contextId: workspaceId,
+    timeoutMs: 5000,
+    now: () => new Date('2026-10-28T15:01:00.000Z'),
+    log: () => undefined,
+  });
+  expect(restored.ran).toBe(0);
+  expect(loadPlan(outbox, identity)?.actions.map((item) => item.taskId)).toEqual([
+    accepted,
+    expect.any(String),
+  ]);
+  const ids = loadPlan(outbox, identity)?.actions.map((item) => item.taskId) ?? [];
+  expect(new Set(ids).size).toBe(2);
+  const listed = await app.inject({
+    method: 'GET',
+    url: `/api/v1/handoff/tasks?role=requester&contextId=${workspaceId}&historyLength=0&pageSize=20`,
+    headers: { authorization: `Bearer ${orchestrator.token}` },
+  });
+  expect(listed.statusCode).toBe(200);
+  const listedIds = ((listed.json() as { tasks?: Array<{ id?: string }> }).tasks ?? []).map((item) => item.id);
+  expect(listedIds).toEqual(expect.arrayContaining(ids));
+  expect(listedIds).toHaveLength(2);
+  const again = await runWatchCycle({
+    mailbox,
+    state: loadState(stateFile, 'executor-0123456789abcdef'),
+    stateFile,
+    outboxFile: outbox,
+    argv: [process.execPath, '-e', 'process.stdout.write("model")'],
+    contextId: workspaceId,
+    timeoutMs: 5000,
+    now: () => new Date('2026-10-28T15:02:00.000Z'),
+    log: () => undefined,
+  });
+  expect(again.ran).toBe(0);
+  const after = await app.inject({
+    method: 'GET',
+    url: `/api/v1/handoff/tasks?role=requester&contextId=${workspaceId}&historyLength=0&pageSize=20`,
+    headers: { authorization: `Bearer ${orchestrator.token}` },
+  });
+  expect(((after.json() as { tasks?: unknown[] }).tasks ?? [])).toHaveLength(2);
 });

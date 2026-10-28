@@ -42,11 +42,12 @@ function mailbox(outcomes: Record<string, TaskOutcome>): MailboxClient & { publi
       this.published += 1;
       return Promise.resolve();
     },
+    sendPrepared: () => Promise.resolve('018f1000-0000-7000-8000-000000000099'),
   };
 }
 
 function command(): string[] {
-  return [process.execPath, '-e', `const fs=require('fs'); let s=''; process.stdin.on('data',d=>s+=d); process.stdin.on('end',()=>{fs.appendFileSync(process.env.OUT, s+'\\n'); process.stdout.write('noted')})`];
+  return [process.execPath, '-e', `const fs=require('fs'); const path=require('path'); let s=''; process.stdin.on('data',d=>s+=d); process.stdin.on('end',()=>{ const event=JSON.parse(s); fs.appendFileSync(process.env.OUT, s+'\\n'); let file={plans:{}}; try { file=JSON.parse(fs.readFileSync(event.outboxFile,'utf8')); } catch {} if (!file.plans) file.plans={}; if (!file.plans[event.eventId]) { file.plans[event.eventId]={eventId:event.eventId,eventKey:event.idempotencyKey,actions:[]}; fs.mkdirSync(path.dirname(event.outboxFile),{recursive:true}); fs.writeFileSync(event.outboxFile, JSON.stringify(file)); } process.stdout.write('noted'); })`];
 }
 
 test('a completed result is handed to the command once and is not posted back onto that task', async () => {
@@ -65,6 +66,7 @@ test('a completed result is handed to the command once and is not posted back on
     state: stored.state,
     stateFile: stored.file,
     argv: command(),
+    outboxFile: path.join(dir, 'outbox.json'),
     contextId: undefined,
     timeoutMs: 5000,
     now: () => new Date('2026-10-28T12:01:00.000Z'),
@@ -86,7 +88,7 @@ test('a completed result is handed to the command once and is not posted back on
       taskId,
       state: 'TASK_STATE_COMPLETED',
       artifact: 'reversed:abc',
-      idempotencyKey: resultIdempotencyKey(taskId, 'TASK_STATE_COMPLETED'),
+      idempotencyKey: resultIdempotencyKey(taskId, 'TASK_STATE_COMPLETED', '2026-10-28T12:00:00.000Z'),
     });
     const second = await runWatchCycle({
       ...input,
@@ -113,8 +115,9 @@ test('a stop while handling a result stays uncertain and does not run the comman
       [taskId]: {
         phase: 'running',
         state: 'TASK_STATE_FAILED',
-        handledState: 'TASK_STATE_FAILED',
-        idempotencyKey: resultIdempotencyKey(taskId, 'TASK_STATE_FAILED'),
+        handledEvent: `${taskId}|TASK_STATE_FAILED|2026-10-28T12:02:00.000Z`,
+        idempotencyKey: resultIdempotencyKey(taskId, 'TASK_STATE_FAILED', '2026-10-28T12:02:00.000Z'),
+        reason: null,
         updatedAt: '2026-10-28T12:02:00.000Z',
       },
     },
@@ -126,6 +129,7 @@ test('a stop while handling a result stays uncertain and does not run the comman
     mailbox: box,
     state,
     stateFile: file,
+    outboxFile: path.join(dir, 'outbox.json'),
     argv: [process.execPath, '-e', 'process.stdout.write("should-not-run")'],
     contextId: undefined,
     timeoutMs: 5000,
@@ -133,7 +137,10 @@ test('a stop while handling a result stays uncertain and does not run the comman
     log: () => undefined,
   });
   expect(result).toMatchObject({ noticed: 0, ran: 0, uncertain: 1 });
-  expect(loadState(file, executorId).outgoing?.[taskId]?.phase).toBe('uncertain');
+  expect(loadState(file, executorId).outgoing?.[taskId]).toMatchObject({
+    phase: 'uncertain',
+    reason: 'no-saved-plan',
+  });
 });
 
 test('failure and intervention are separate results, and a later state is a new event', async () => {
@@ -151,6 +158,7 @@ test('failure and intervention are separate results, and a later state is a new 
       state: stored.state,
       stateFile: stored.file,
       argv: command(),
+      outboxFile: path.join(dir, 'outbox.json'),
       contextId: undefined,
       timeoutMs: 5000,
       now: () => new Date('2026-10-28T12:04:30.000Z'),
@@ -163,6 +171,7 @@ test('failure and intervention are separate results, and a later state is a new 
       state: loadState(stored.file, executorId),
       stateFile: stored.file,
       argv: command(),
+      outboxFile: path.join(dir, 'outbox.json'),
       contextId: undefined,
       timeoutMs: 5000,
       now: () => new Date('2026-10-28T12:05:30.000Z'),
@@ -201,6 +210,7 @@ test('ids printed by the command are remembered without choosing a recipient', a
     mailbox: box,
     state: stored.state,
     stateFile: stored.file,
+    outboxFile: path.join(dir, 'outbox.json'),
     argv: [process.execPath, '-e', `process.stdout.write(${JSON.stringify(JSON.stringify({ watch: [created] }))})`],
     contextId: undefined,
     timeoutMs: 5000,
@@ -209,4 +219,75 @@ test('ids printed by the command are remembered without choosing a recipient', a
   });
   expect(result.ran).toBe(1);
   expect(loadState(stored.file, executorId).outgoing?.[created]?.phase).toBe('seen');
+});
+
+test('the same intervention state runs again only when its status timestamp changes', async () => {
+  const dir = directory();
+  const stored = fresh(dir);
+  const seen = path.join(dir, 'seen');
+  const outcomes: Record<string, TaskOutcome> = {
+    [taskId]: { state: 'TASK_STATE_INPUT_REQUIRED', timestamp: '2026-10-28T13:00:00.000Z', artifact: 'first' },
+    '018f1000-0000-7000-8000-000000000043': { state: 'TASK_STATE_AUTH_REQUIRED', timestamp: '2026-10-28T13:00:00.000Z', artifact: 'auth-first' },
+  };
+  const box = mailbox(outcomes);
+  const authId = '018f1000-0000-7000-8000-000000000043';
+  process.env['OUT'] = seen;
+  try {
+    const first = await runWatchCycle({
+      mailbox: box,
+      state: stored.state,
+      stateFile: stored.file,
+      outboxFile: path.join(dir, 'outbox.json'),
+      argv: command(),
+      contextId: undefined,
+      timeoutMs: 5000,
+      now: () => new Date('2026-10-28T13:00:30.000Z'),
+      log: () => undefined,
+    });
+    expect(first.ran).toBe(2);
+    const reread = await runWatchCycle({
+      mailbox: box,
+      state: loadState(stored.file, executorId),
+      stateFile: stored.file,
+      outboxFile: path.join(dir, 'outbox.json'),
+      argv: command(),
+      contextId: undefined,
+      timeoutMs: 5000,
+      now: () => new Date('2026-10-28T13:01:00.000Z'),
+      log: () => undefined,
+    });
+    expect(reread.ran).toBe(0);
+    outcomes[taskId] = { state: 'TASK_STATE_WORKING', timestamp: '2026-10-28T13:02:00.000Z', artifact: '' };
+    outcomes[authId] = { state: 'TASK_STATE_WORKING', timestamp: '2026-10-28T13:02:00.000Z', artifact: '' };
+    await runWatchCycle({
+      mailbox: box,
+      state: loadState(stored.file, executorId),
+      stateFile: stored.file,
+      outboxFile: path.join(dir, 'outbox.json'),
+      argv: command(),
+      contextId: undefined,
+      timeoutMs: 5000,
+      now: () => new Date('2026-10-28T13:02:30.000Z'),
+      log: () => undefined,
+    });
+    outcomes[taskId] = { state: 'TASK_STATE_INPUT_REQUIRED', timestamp: '2026-10-28T13:03:00.000Z', artifact: 'second' };
+    outcomes[authId] = { state: 'TASK_STATE_AUTH_REQUIRED', timestamp: '2026-10-28T13:03:00.000Z', artifact: 'auth-second' };
+    const again = await runWatchCycle({
+      mailbox: box,
+      state: loadState(stored.file, executorId),
+      stateFile: stored.file,
+      outboxFile: path.join(dir, 'outbox.json'),
+      argv: command(),
+      contextId: undefined,
+      timeoutMs: 5000,
+      now: () => new Date('2026-10-28T13:03:30.000Z'),
+      log: () => undefined,
+    });
+    expect(again.ran).toBe(2);
+    const states = readFileSync(seen, 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { state: string; statusTimestamp: string }).state);
+    expect(states.filter((item) => item === 'TASK_STATE_INPUT_REQUIRED')).toHaveLength(2);
+    expect(states.filter((item) => item === 'TASK_STATE_AUTH_REQUIRED')).toHaveLength(2);
+  } finally {
+    delete process.env['OUT'];
+  }
 });

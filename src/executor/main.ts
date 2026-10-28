@@ -73,6 +73,7 @@ async function main(): Promise<void> {
     const timeoutMs = Math.max(1000, Number(process.env['BSL_MESH_EXECUTOR_COMMAND_TIMEOUT_MS'] ?? '120000'));
     const once = process.env['BSL_MESH_EXECUTOR_ONCE'] === 'true';
     const stateFile = path.join(stateDirectory, 'state.json');
+    const outboxFile = process.env['BSL_MESH_EXECUTOR_OUTBOX']?.trim() || path.join(stateDirectory, 'outbox.json');
     writeFileSync(path.join(stateDirectory, 'started-at'), `${new Date().toISOString()}\n`, { mode: 0o600 });
     do {
       if (stopped) {
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
             mailbox,
             state,
             stateFile,
+            outboxFile,
             argv: resultArgv,
             contextId,
             timeoutMs: timeout,
