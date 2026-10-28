@@ -40,6 +40,7 @@ export type HandoffDirective = {
   humanParticipated?: boolean;
   escalationReason?: EscalationReason;
   claimToken?: string;
+  visibleAt?: string;
 };
 
 export type SendDraft = {
@@ -47,6 +48,7 @@ export type SendDraft = {
   directive: HandoffDirective;
 };
 
+const VISIBLE_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const KEY = /^[A-Za-z0-9_-]{8,128}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SKILL_ID = /^[a-z0-9-]{1,40}$/;
@@ -151,7 +153,7 @@ function parseDirective(value: unknown): HandoffDirective {
     return {};
   }
   const body = object(extension);
-  exactKeys(body, ['recipientAgentId', 'state', 'humanParticipated', 'escalationReason', 'claimToken']);
+  exactKeys(body, ['recipientAgentId', 'state', 'humanParticipated', 'escalationReason', 'claimToken', 'visibleAt']);
   const directive: HandoffDirective = {};
   if (body['recipientAgentId'] !== undefined) {
     directive.recipientAgentId = uuid(body['recipientAgentId']);
@@ -177,7 +179,49 @@ function parseDirective(value: unknown): HandoffDirective {
   if (body['claimToken'] !== undefined) {
     directive.claimToken = key(body['claimToken']);
   }
+  if (body['visibleAt'] !== undefined) {
+    directive.visibleAt = parseVisibleAt(body['visibleAt']);
+  }
   return directive;
+}
+
+export function parseVisibleAt(value: unknown): string {
+  if (typeof value !== 'string' || !VISIBLE_AT.test(value)) {
+    throw invalid();
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    throw invalid();
+  }
+  const canonical = new Date(parsed).toISOString();
+  const normalized = value.length === 20 ? `${value.slice(0, 19)}.000Z` : value;
+  if (canonical !== normalized) {
+    throw invalid();
+  }
+  return canonical;
+}
+
+export function concealedUntil(
+  metadata: Record<string, unknown>,
+  viewerAgentId: string,
+  requesterAgentId: string,
+  now: Date,
+): boolean {
+  if (viewerAgentId === requesterAgentId) {
+    return false;
+  }
+  const visibleAt = metadata['visibleAt'];
+  if (visibleAt === undefined) {
+    return false;
+  }
+  if (typeof visibleAt !== 'string') {
+    return true;
+  }
+  const at = Date.parse(visibleAt);
+  if (Number.isNaN(at)) {
+    return true;
+  }
+  return at > now.getTime();
 }
 
 export function parseListRole(value: unknown): 'recipient' | 'requester' | undefined {

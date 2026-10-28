@@ -499,6 +499,7 @@ export function buildMcpServer(input: {
                 ...(args.state !== undefined ? { state: args.state } : {}),
                 ...(args.human_participated !== undefined ? { humanParticipated: args.human_participated } : {}),
                 ...(args.escalation_reason !== undefined ? { escalationReason: args.escalation_reason } : {}),
+                ...(args.visible_at !== undefined ? { visibleAt: args.visible_at } : {}),
               },
             },
           });
